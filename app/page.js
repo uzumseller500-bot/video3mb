@@ -6,7 +6,9 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const MAX_BYTES = 3 * 1024 * 1024;
 // 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
-const TARGET_BYTES = Math.floor(2.68 * 1024 * 1024);
+const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
+const MIN_CLEAR_VIDEO_K = 1400;
+const AUDIO_K = 64;
 
 const fmtTime = (s=0) => {
   s = Math.max(0, Math.floor(s));
@@ -27,6 +29,7 @@ export default function Home() {
   const [watermark,setWatermark] = useState('');
   const [wmPos,setWmPos] = useState('br');
   const [opacity,setOpacity] = useState(70);
+  const [exportMode,setExportMode] = useState('3mb');
   const [progress,setProgress] = useState(0);
   const [status,setStatus] = useState('idle');
   const [message,setMessage] = useState('');
@@ -37,6 +40,10 @@ export default function Home() {
   const engineModeRef = useRef('single');
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
+  const maxClearSeconds = useMemo(()=>{
+    const audioK=audio==='mute'?0:AUDIO_K;
+    return Math.max(1,Math.floor((TARGET_BYTES*8/1000)/(MIN_CLEAR_VIDEO_K+audioK+24)));
+  },[audio]);
 
   useEffect(()=>()=> {
     if(src) URL.revokeObjectURL(src);
@@ -129,34 +136,43 @@ export default function Home() {
   }
 
   function overlayPos(){
+    const p=exportMode==='4k'?64:32;
     return {
-      tl:'32:32', tr:'W-w-32:32', bl:'32:H-h-32',
-      br:'W-w-32:H-h-32', c:'(W-w)/2:(H-h)/2'
-    }[wmPos] || 'W-w-32:H-h-32';
+      tl:p+':'+p, tr:'W-w-'+p+':'+p, bl:p+':H-h-'+p,
+      br:'W-w-'+p+':H-h-'+p, c:'(W-w)/2:(H-h)/2'
+    }[wmPos] || ('W-w-'+p+':H-h-'+p);
   }
 
   function baseFilter(){
-    if(cropMode==='fit') {
-      return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,fps=24';
+    const is4k=exportMode==='4k';
+    const w=is4k?2160:1080;
+    const h=is4k?2880:1440;
+    const fps=is4k?30:24;
+    const sharp=is4k?'unsharp=5:5:0.55:3:3:0.25':'unsharp=5:5:0.35:3:3:0.15';
+
+    if(cropMode==='fit'){
+      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags=lanczos,pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black,'+sharp+',fps='+fps;
     }
     const pos={
-      center:'(iw-1080)/2:(ih-1440)/2',
-      top:'(iw-1080)/2:0',
-      bottom:'(iw-1080)/2:ih-1440',
-      left:'0:(ih-1440)/2',
-      right:'iw-1080:(ih-1440)/2'
-    }[focus] || '(iw-1080)/2:(ih-1440)/2';
-    return `scale=1080:1440:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=1080:1440:${pos},fps=24`;
+      center:'(iw-'+w+')/2:(ih-'+h+')/2',
+      top:'(iw-'+w+')/2:0',
+      bottom:'(iw-'+w+')/2:ih-'+h,
+      left:'0:(ih-'+h+')/2',
+      right:'iw-'+w+':(ih-'+h+')/2'
+    }[focus] || ('(iw-'+w+')/2:(ih-'+h+')/2');
+
+    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags=lanczos,crop='+w+':'+h+':'+pos+','+sharp+',fps='+fps;
   }
 
   async function makeWatermark(ffmpeg){
     if(!watermark.trim()) return false;
     const c=document.createElement('canvas');
     const x=c.getContext('2d');
-    const fs=48;
+    const fs=exportMode==='4k'?96:48;
     x.font=`800 ${fs}px Arial`;
-    c.width=Math.max(180,Math.ceil(x.measureText(watermark.trim()).width+48));
-    c.height=88;
+    const pad=exportMode==='4k'?96:48;
+    c.width=Math.max(exportMode==='4k'?360:180,Math.ceil(x.measureText(watermark.trim()).width+pad));
+    c.height=exportMode==='4k'?176:88;
     x.font=`800 ${fs}px Arial`;
     x.textAlign='center';
     x.textBaseline='middle';
