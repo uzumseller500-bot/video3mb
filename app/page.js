@@ -64,14 +64,8 @@ export default function Home() {
     setOutUrl('');
     setOutSize(0);
     setStatus('idle');
-    setMessage('Tezkor dvigatel tayyorlanmoqda...');
+    setMessage('⚡ Hardware tezkor rejim tayyor.');
     setProgress(0);
-    // Foydalanuvchi sozlamalarni tanlayotgan paytda FFmpeg oldindan yuklanadi.
-    setTimeout(() => {
-      loadEngine(true)
-        .then(() => setMessage('Tezkor rejim tayyor.'))
-        .catch(() => setMessage('Dvigatel eksport vaqtida yuklanadi.'));
-    }, 50);
   }
 
   async function loadEngine(silent=false){
@@ -316,9 +310,42 @@ export default function Home() {
     });
 
     if(!conversion.isValid) throw new Error('Fast conversion invalid');
-    conversion.onProgress=p=>setProgress(Math.min(99,Math.round((p||0)*100)));
+
+    let lastProgressAt=Date.now();
+    let lastProgressValue=0;
+    conversion.onProgress=(p)=>{
+      lastProgressAt=Date.now();
+      lastProgressValue=p||0;
+      // 100% callback hali MP4 finalization tugaganini anglatmaydi.
+      if(lastProgressValue>=0.98){
+        setProgress(98);
+        setMessage('MP4 fayl yakunlanmoqda...');
+      }else{
+        setProgress(Math.min(97,Math.round(lastProgressValue*100)));
+      }
+    };
+
     setMessage('⚡ Hardware tezkor eksport...');
-    await conversion.execute();
+
+    let watchdogId;
+    const stalled=new Promise((_,reject)=>{
+      watchdogId=setInterval(()=>{
+        const noProgressFor=Date.now()-lastProgressAt;
+        const limit=lastProgressValue>=0.95 ? 12000 : 30000;
+        if(noProgressFor>limit){
+          clearInterval(watchdogId);
+          conversion.cancel()
+            .catch(()=>{})
+            .finally(()=>reject(new Error('Hardware conversion stalled')));
+        }
+      },1000);
+    });
+
+    try{
+      await Promise.race([conversion.execute(),stalled]);
+    }finally{
+      clearInterval(watchdogId);
+    }
 
     const buffer=target.buffer;
     if(!buffer) throw new Error('No output buffer');
@@ -344,7 +371,8 @@ export default function Home() {
         }
       }catch(fastErr){
         console.warn('Fast path fallback:',fastErr);
-        setMessage('Moslik rejimi: aniq 3 MB eksport...');
+        setProgress(1);
+        setMessage('Hardware yo‘l javob bermadi — avtomatik zaxira rejimiga o‘tildi...');
         const ffmpeg=await loadEngine();
         const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
         const inputName=`input.${ext||'mp4'}`;
