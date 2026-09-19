@@ -32,6 +32,7 @@ export default function Home() {
   const [wmPos,setWmPos] = useState('br');
   const [opacity,setOpacity] = useState(70);
   const [exportMode,setExportMode] = useState('3mb');
+  const [compressionMode,setCompressionMode] = useState('fast');
   const [progress,setProgress] = useState(0);
   const [status,setStatus] = useState('idle');
   const [message,setMessage] = useState('');
@@ -156,11 +157,13 @@ export default function Home() {
     const w=is4k?2160:1080;
     const h=is4k?2880:1440;
     const fps=is4k?30:24;
-    const sharp=is4k?'unsharp=5:5:0.55:3:3:0.25':'unsharp=5:5:0.35:3:3:0.15';
+    const fast=compressionMode==='fast';
+    const scaleFlags=fast?'fast_bilinear':'lanczos';
+    const sharp=fast?'':(is4k?',unsharp=5:5:0.55:3:3:0.25':',unsharp=5:5:0.35:3:3:0.15');
     const speedFilter=speed===1?'':',setpts=PTS/'+speed;
 
     if(cropMode==='fit'){
-      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags=lanczos,pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black,'+sharp+',fps='+fps+speedFilter;
+      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags='+scaleFlags+',pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black'+sharp+',fps='+fps+speedFilter;
     }
     const pos={
       center:'(iw-'+w+')/2:(ih-'+h+')/2',
@@ -170,7 +173,7 @@ export default function Home() {
       right:'iw-'+w+':(ih-'+h+')/2'
     }[focus] || ('(iw-'+w+')/2:(ih-'+h+')/2');
 
-    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags=lanczos,crop='+w+':'+h+':'+pos+','+sharp+',fps='+fps+speedFilter;
+    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags='+scaleFlags+',crop='+w+':'+h+':'+pos+sharp+',fps='+fps+speedFilter;
   }
 
   async function makeWatermark(ffmpeg){
@@ -215,10 +218,10 @@ export default function Home() {
     }
 
     if(exportMode==='4k'){
-      args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','5.1','-crf','19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
     }else{
       const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
-      args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.04)+'k','-bufsize',Math.floor(vk*2)+'k','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
     }
 
     if(audio==='mute'){
@@ -243,7 +246,7 @@ export default function Home() {
 
     setStatus('processing');
     setProgress(1);
-    setMessage(exportMode==='4k'?'4K maksimal sifat tayyorlanmoqda...':'Tiniq 3 MB eksport tayyorlanmoqda...');
+    setMessage(exportMode==='4k'?(compressionMode==='fast'?'4K tez eksport tayyorlanmoqda...':'4K maksimal sifat tayyorlanmoqda...'):(compressionMode==='fast'?'⚡ Tez 3 MB siqish tayyorlanmoqda...':'✨ Tiniq 3 MB eksport tayyorlanmoqda...'));
     setOutUrl('');
     setOutSize(0);
 
@@ -253,19 +256,21 @@ export default function Home() {
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
-      const totalK=Math.floor((TARGET_BYTES*8)/outputDuration/1000);
+      const activeTargetBytes=compressionMode==='fast'?Math.floor(2.66*1024*1024):TARGET_BYTES;
+      const totalK=Math.floor((activeTargetBytes*8)/outputDuration/1000);
       let audioK=audio==='mute'?0:Math.max(24,Math.min(AUDIO_K,Math.floor(totalK*0.10)));
       let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
       const hasWM=await makeWatermark(ffmpeg);
 
-      setMessage(exportMode==='4k' ? '4K 2160×2880 kodlanmoqda — bu rejim sekinroq...' : (engineModeRef.current==='multi'?'Ko‘p yadroli tiniq siqish...':'Tiniq siqish...'));
+      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Ko‘p yadroli tiniq siqish...':'✨ Tiniq siqish...')));
       let result=await encode(ffmpeg,inputName,videoK,1,hasWM,audioK);
 
       if(exportMode==='3mb'){
-        for(let attempt=2; attempt<=5 && result.byteLength>MAX_BYTES; attempt++){
+        const maxAttempts=compressionMode==='fast'?2:4;
+        for(let attempt=2; attempt<=maxAttempts && result.byteLength>MAX_BYTES; attempt++){
           setProgress(1);
-          setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/5...');
-          const ratio=TARGET_BYTES/result.byteLength;
+          setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/'+maxAttempts+'...');
+          const ratio=activeTargetBytes/result.byteLength;
           videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*0.88));
           if(audio!=='mute') audioK=Math.max(24,Math.floor(audioK*ratio*0.94));
           result=await encode(ffmpeg,inputName,videoK,attempt,hasWM,audioK);
@@ -349,7 +354,16 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>3. Tezlik</h3>
+          <h3>3. Siqish rejimi</h3>
+          <div className="seg">
+            <button className={compressionMode==='fast'?'on':''} onClick={()=>setCompressionMode('fast')}>⚡ Tez siqish</button>
+            <button className={compressionMode==='quality'?'on':''} onClick={()=>setCompressionMode('quality')}>✨ Tiniq siqish</button>
+          </div>
+          <div className="msg">{compressionMode==='fast'?'Tezroq: yengil filter + superfast encoder + 1–2 urinish.':'Sifatliroq: Lanczos + sharpening + yaxshiroq encoder.'}</div>
+        </div>
+
+        <div className="block">
+          <h3>4. Tezlik</h3>
           <div className="seg">
             {[1,1.25,1.5,1.75,2,2.5,3].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
           </div>
@@ -360,7 +374,7 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>4. Ovoz</h3>
+          <h3>5. Ovoz</h3>
           <div className="seg">
             <button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button>
             <button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button>
@@ -369,7 +383,7 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>5. Suv belgisi</h3>
+          <h3>6. Suv belgisi</h3>
           <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)} />
           <div className="row">
             <select value={wmPos} onChange={e=>setWmPos(e.target.value)}>
@@ -383,14 +397,15 @@ export default function Home() {
           <div><small>FORMAT</small><b>{exportMode==='4k'?'2160×2880 · 4K':'1080×1440'}</b></div>
           <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
           <div><small>TEZLIK</small><b>{speed}×</b></div>
+          <div><small>SIQISH</small><b>{compressionMode==='fast'?'⚡ TEZ':'✨ TINIQ'}</b></div>
         </div>
         {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB uchun tavsiya: {recommendedSpeed}×. Hozirgi chiqish: {Math.ceil(outputDuration)} sek. Eksport baribir ishlaydi.</div>}
         {exportMode==='3mb' && Math.floor((TARGET_BYTES*8)/outputDuration/1000)-(audio==='mute'?0:AUDIO_K)-24 < GOOD_VIDEO_K && <div className="msg warning">Video uzunligi sabab sifat pasayishi mumkin. 2×–3× tezlik yoki qirqish tiniqlikni oshiradi.</div>}
         {exportMode==='4k' && <div className="msg">4K rejim fayl hajmini cheklamaydi. Sifat maksimal, eksport 1080 rejimdan sekinroq.</div>}
-        <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?'4K MAX SIFATDA TAYYORLASH':'3 MB TINIQ VIDEO TAYYORLASH')}</button>
+        <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?(compressionMode==='fast'?'4K TEZ TAYYORLASH':'4K MAX SIFATDA TAYYORLASH'):(compressionMode==='fast'?'⚡ 3 MB TEZ TAYYORLASH':'✨ 3 MB TINIQ TAYYORLASH'))}</button>
         {status==='processing' && <div className="bar"><i style={{width:`${progress}%`}}/></div>}
         {message && <div className={`msg ${status}`}>{message}</div>}
-        {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {exportMode==='4k'?'4K 2160×2880':'1080×1440'} · {speed}× · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download={exportMode==='4k'?'video-4k-2160x2880.mp4':'video-1080x1440-3mb.mp4'}>YUKLAB OLISH</a></div>}
+        {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {exportMode==='4k'?'4K 2160×2880':'1080×1440'} · {speed}× · {compressionMode==='fast'?'tez':'tiniq'} · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download={exportMode==='4k'?'video-4k-2160x2880.mp4':'video-1080x1440-3mb.mp4'}>YUKLAB OLISH</a></div>}
       </div>
     </section>
   </main>;
