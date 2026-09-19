@@ -5,7 +5,8 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const MAX_BYTES = 3 * 1024 * 1024;
-// 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.\nconst TARGET_BYTES = Math.floor(2.68 * 1024 * 1024);
+// 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
+const TARGET_BYTES = Math.floor(2.68 * 1024 * 1024);
 
 const fmtTime = (s=0) => {
   s = Math.max(0, Math.floor(s));
@@ -31,7 +32,9 @@ export default function Home() {
   const [message,setMessage] = useState('');
   const [outUrl,setOutUrl] = useState('');
   const [outSize,setOutSize] = useState(0);
-  const ffmpegRef = useRef(null);\n  const enginePromiseRef = useRef(null);\n  const engineModeRef = useRef('single');
+  const ffmpegRef = useRef(null);
+  const enginePromiseRef = useRef(null);
+  const engineModeRef = useRef('single');
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
 
