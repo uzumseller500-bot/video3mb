@@ -9,7 +9,7 @@ const MAX_BYTES = 3 * 1024 * 1024;
 const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
 const GOOD_VIDEO_K = 900;
 const MIN_VIDEO_K = 80;
-const AUDIO_K = 64;
+const AUDIO_K = 32;
 
 const fmtTime = (s=0) => {
   s = Math.max(0, Math.floor(s));
@@ -156,10 +156,10 @@ export default function Home() {
     const is4k=exportMode==='4k';
     const w=is4k?2160:1080;
     const h=is4k?2880:1440;
-    const fps=is4k?30:24;
+    const fps=is4k?30:20;
     const fast=compressionMode==='fast';
-    const scaleFlags=fast?'fast_bilinear':'lanczos';
-    const sharp=fast?'':(is4k?',unsharp=5:5:0.55:3:3:0.25':',unsharp=5:5:0.35:3:3:0.15');
+    const scaleFlags=fast?'bicubic':'lanczos';
+    const sharp=fast?(is4k?',unsharp=3:3:0.16:3:3:0':',unsharp=3:3:0.20:3:3:0'):(is4k?',unsharp=5:5:0.48:3:3:0.20':',unsharp=5:5:0.32:3:3:0.12');
     const speedFilter=speed===1?'':',setpts=PTS/'+speed;
 
     if(cropMode==='fit'){
@@ -256,9 +256,9 @@ export default function Home() {
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
-      const activeTargetBytes=compressionMode==='fast'?Math.floor(2.66*1024*1024):TARGET_BYTES;
+      const activeTargetBytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
       const totalK=Math.floor((activeTargetBytes*8)/outputDuration/1000);
-      let audioK=audio==='mute'?0:Math.max(24,Math.min(AUDIO_K,Math.floor(totalK*0.10)));
+      let audioK=audio==='mute'?0:Math.max(24,Math.min(AUDIO_K,Math.floor(totalK*0.07)));
       let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
       const hasWM=await makeWatermark(ffmpeg);
 
@@ -291,7 +291,7 @@ export default function Home() {
         setMessage('4K MAX sifat tayyor — 2160×2880.');
       }else if(blob.size<=MAX_BYTES){
         setStatus('done');
-        setMessage('Tayyor — 1080×1440, tiniq va 3 MB limit ichida.');
+        setMessage('Tayyor — 1080×1440 · 20 FPS · video bitrate maksimal · 3 MB ichida.');
       }else{
         setStatus('warning');
         setMessage('Video tayyor, lekin 3 MB limit juda qattiq bo‘lgani uchun hajm biroz oshdi. 3× yoki ovozsiz rejim yanada kichraytiradi.');
@@ -359,7 +359,7 @@ export default function Home() {
             <button className={compressionMode==='fast'?'on':''} onClick={()=>setCompressionMode('fast')}>⚡ Tez siqish</button>
             <button className={compressionMode==='quality'?'on':''} onClick={()=>setCompressionMode('quality')}>✨ Tiniq siqish</button>
           </div>
-          <div className="msg">{compressionMode==='fast'?'Tezroq: yengil filter + superfast encoder + 1–2 urinish.':'Sifatliroq: Lanczos + sharpening + yaxshiroq encoder.'}</div>
+          <div className="msg">{compressionMode==='fast'?'Tezroq: 20 FPS + bicubic + yengil tiniqlashtirish + superfast encoder.':'Sifatliroq: 20 FPS + Lanczos + yengil sharpening + yaxshiroq encoder.'}</div>
         </div>
 
         <div className="block">
@@ -398,6 +398,8 @@ export default function Home() {
           <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
           <div><small>TEZLIK</small><b>{speed}×</b></div>
           <div><small>SIQISH</small><b>{compressionMode==='fast'?'⚡ TEZ':'✨ TINIQ'}</b></div>
+          {exportMode==='3mb' && <div><small>VIDEO</small><b>20 FPS</b></div>}
+          {exportMode==='3mb' && <div><small>AUDIO</small><b>{audio==='mute'?'0':'32'} kbps</b></div>}
         </div>
         {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB uchun tavsiya: {recommendedSpeed}×. Hozirgi chiqish: {Math.ceil(outputDuration)} sek. Eksport baribir ishlaydi.</div>}
         {exportMode==='3mb' && Math.floor((TARGET_BYTES*8)/outputDuration/1000)-(audio==='mute'?0:AUDIO_K)-24 < GOOD_VIDEO_K && <div className="msg warning">Video uzunligi sabab sifat pasayishi mumkin. 2×–3× tezlik yoki qirqish tiniqlikni oshiradi.</div>}
