@@ -207,35 +207,160 @@ export default function Home() {
     return new Uint8Array(data);
   }
 
+  function cropForAspect(w,h){
+    const target=1080/1440;
+    const current=w/h;
+    let cw=w, ch=h, left=0, top=0;
+    if(current>target){
+      cw=h*target;
+      if(focus==='left') left=0;
+      else if(focus==='right') left=w-cw;
+      else left=(w-cw)/2;
+    } else if(current<target){
+      ch=w/target;
+      if(focus==='top') top=0;
+      else if(focus==='bottom') top=h-ch;
+      else top=(h-ch)/2;
+    }
+    return {left:Math.max(0,left),top:Math.max(0,top),width:Math.max(2,cw),height:Math.max(2,ch)};
+  }
+
+  async function fastExport(){
+    if(typeof VideoEncoder==='undefined') throw new Error('WebCodecs unavailable');
+
+    const {
+      Input, Output, Conversion, ALL_FORMATS, BlobSource,
+      Mp4OutputFormat, BufferTarget, canEncodeVideo, canEncodeAudio
+    } = await import('mediabunny');
+
+    const canAvc=await canEncodeVideo('avc',{width:1080,height:1440});
+    if(!canAvc) throw new Error('H264 hardware codec unavailable');
+    if(audio==='keep' && !(await canEncodeAudio('aac'))) throw new Error('AAC WebCodecs unavailable');
+    if(audio==='keep' && volume!==100) throw new Error('Custom volume uses fallback');
+
+    const input=new Input({
+      source:new BlobSource(file),
+      formats:ALL_FORMATS,
+    });
+    const target=new BufferTarget();
+    const output=new Output({
+      format:new Mp4OutputFormat(),
+      target,
+    });
+
+    const totalBps=Math.floor((TARGET_BYTES*8)/clipDuration);
+    const audioBps=audio==='mute'?0:64000;
+    const videoBps=Math.max(120000,totalBps-audioBps-24000);
+    let wmCanvas=null, wmCtx=null;
+
+    const conversion=await Conversion.init({
+      input,
+      output,
+      tracks:'primary',
+      trim:{start,end},
+      video: async track => {
+        const w=await track.getDisplayWidth();
+        const h=await track.getDisplayHeight();
+        const opts={
+          width:1080,
+          height:1440,
+          fit:cropMode==='fit'?'contain':'fill',
+          codec:'avc',
+          bitrate:videoBps,
+          frameRate:30,
+          hardwareAcceleration:'prefer-hardware',
+          forceTranscode:true,
+          keyFrameInterval:2,
+        };
+        if(cropMode==='cover') opts.crop=cropForAspect(w,h);
+        if(watermark.trim()){
+          opts.process=(sample)=>{
+            if(!wmCanvas){
+              wmCanvas=typeof OffscreenCanvas!=='undefined'
+                ? new OffscreenCanvas(1080,1440)
+                : Object.assign(document.createElement('canvas'),{width:1080,height:1440});
+              wmCtx=wmCanvas.getContext('2d');
+            }
+            wmCtx.clearRect(0,0,1080,1440);
+            sample.draw(wmCtx,0,0,1080,1440);
+            const text=watermark.trim();
+            const fs=48;
+            wmCtx.font=`800 ${fs}px Arial`;
+            wmCtx.textBaseline='middle';
+            const tw=wmCtx.measureText(text).width;
+            const pad=32;
+            let x=pad+tw/2, y=pad+fs/2;
+            if(wmPos==='tr'){x=1080-pad-tw/2;y=pad+fs/2;}
+            if(wmPos==='bl'){x=pad+tw/2;y=1440-pad-fs/2;}
+            if(wmPos==='br'){x=1080-pad-tw/2;y=1440-pad-fs/2;}
+            if(wmPos==='c'){x=540;y=720;}
+            wmCtx.textAlign='center';
+            wmCtx.globalAlpha=opacity/100;
+            wmCtx.lineWidth=7;
+            wmCtx.strokeStyle='rgba(0,0,0,.45)';
+            wmCtx.strokeText(text,x,y);
+            wmCtx.fillStyle='#fff';
+            wmCtx.fillText(text,x,y);
+            wmCtx.globalAlpha=1;
+            return wmCanvas;
+          };
+          opts.processedWidth=1080;
+          opts.processedHeight=1440;
+        }
+        return opts;
+      },
+      audio: audio==='mute'
+        ? {discard:true}
+        : {codec:'aac',bitrate:64000,forceTranscode:true},
+      tags:{},
+    });
+
+    if(!conversion.isValid) throw new Error('Fast conversion invalid');
+    conversion.onProgress=p=>setProgress(Math.min(99,Math.round((p||0)*100)));
+    setMessage('⚡ Hardware tezkor eksport...');
+    await conversion.execute();
+
+    const buffer=target.buffer;
+    if(!buffer) throw new Error('No output buffer');
+    return new Uint8Array(buffer);
+  }
+
   async function exportVideo(){
     if(!file) return;
     setStatus('processing');
     setProgress(1);
-    setMessage('Tayyorlanmoqda...');
+    setMessage('Tezkor eksport tayyorlanmoqda...');
     setOutUrl('');
     setOutSize(0);
 
     try{
-      const ffmpeg=await loadEngine();
-      const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
-      const inputName=`input.${ext||'mp4'}`;
-      await ffmpeg.writeFile(inputName,await fetchFile(file));
-      const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
-      const audioK=audio==='mute'?0:Math.max(32,Math.min(96,Math.floor(totalK*.16)));
-      let videoK=Math.max(80,totalK-audioK-18);
-      const hasWM=await makeWatermark(ffmpeg);
-      setMessage(engineModeRef.current==='multi' ? 'Tezkor ko‘p yadroli siqish...' : 'Tezkor siqish...');
-      let result=await encode(ffmpeg,inputName,videoK,1,hasWM);
-
-      // Faqat kamdan-kam hollarda limit oshsa, bitta qo‘shimcha urinish.
-      if(result.byteLength>MAX_BYTES){
-        setMessage('Hajmni 3 MB ga aniq moslayapman...');
-        videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.90));
-        result=await encode(ffmpeg,inputName,videoK,2,hasWM);
+      let result;
+      try{
+        result=await fastExport();
+        if(result.byteLength>MAX_BYTES){
+          // Hardware encoderlar target bitrate’dan biroz oshishi mumkin.
+          // Limit oshsa eski aniq FFmpeg yo‘li faqat shu holatda ishlaydi.
+          throw new Error('Fast output exceeded 3 MB');
+        }
+      }catch(fastErr){
+        console.warn('Fast path fallback:',fastErr);
+        setMessage('Moslik rejimi: aniq 3 MB eksport...');
+        const ffmpeg=await loadEngine();
+        const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
+        const inputName=`input.${ext||'mp4'}`;
+        await ffmpeg.writeFile(inputName,await fetchFile(file));
+        const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
+        const audioK=audio==='mute'?0:Math.max(32,Math.min(96,Math.floor(totalK*.16)));
+        let videoK=Math.max(80,totalK-audioK-18);
+        const hasWM=await makeWatermark(ffmpeg);
+        result=await encode(ffmpeg,inputName,videoK,1,hasWM);
+        if(result.byteLength>MAX_BYTES){
+          videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.90));
+          result=await encode(ffmpeg,inputName,videoK,2,hasWM);
+        }
+        try{await ffmpeg.deleteFile(inputName);}catch{}
+        if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
       }
-
-      try{await ffmpeg.deleteFile(inputName);}catch{}
-      if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
 
       const blob=new Blob([result],{type:'video/mp4'});
       const u=URL.createObjectURL(blob);
