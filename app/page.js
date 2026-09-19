@@ -64,7 +64,7 @@ export default function Home() {
     setOutUrl('');
     setOutSize(0);
     setStatus('idle');
-    setMessage('⚡ Hardware tezkor rejim tayyor.');
+    setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
     setProgress(0);
   }
 
@@ -76,7 +76,15 @@ export default function Home() {
     enginePromiseRef.current=(async()=>{
       const makeFFmpeg=()=>{
         const ffmpeg=new FFmpeg();
-        ffmpeg.on('progress',({progress:p})=>setProgress(Math.min(99,Math.round((p||0)*100))));
+        ffmpeg.on('progress',({progress:p})=>{
+          const pct=Math.max(1,Math.round((p||0)*100));
+          if(pct>=98){
+            setProgress(98);
+            setMessage('MP4 fayl yakunlanmoqda...');
+          }else{
+            setProgress(Math.min(97,pct));
+          }
+        });
         return ffmpeg;
       };
 
@@ -129,7 +137,7 @@ export default function Home() {
 
   function baseFilter(){
     if(cropMode==='fit') {
-      return 'scale=1080:1440:force_original_aspect_ratio=decrease,pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black';
+      return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags=fast_bilinear,pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black,fps=24';
     }
     const pos={
       center:'(iw-1080)/2:(ih-1440)/2',
@@ -138,7 +146,7 @@ export default function Home() {
       left:'0:(ih-1440)/2',
       right:'iw-1080:(ih-1440)/2'
     }[focus] || '(iw-1080)/2:(ih-1440)/2';
-    return `scale=1080:1440:force_original_aspect_ratio=increase,crop=1080:1440:${pos}`;
+    return `scale=1080:1440:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=1080:1440:${pos},fps=24`;
   }
 
   async function makeWatermark(ffmpeg){
@@ -179,7 +187,7 @@ export default function Home() {
     }
 
     args.push(
-      '-c:v','libx264','-preset','superfast','-pix_fmt','yuv420p',
+      '-c:v','libx264','-preset','ultrafast','-tune','fastdecode','-threads','4','-pix_fmt','yuv420p',
       '-b:v',`${Math.max(80,Math.floor(videoK))}k`,
       '-maxrate',`${Math.max(90,Math.floor(videoK*1.06))}k`,
       '-bufsize',`${Math.max(160,Math.floor(videoK*2))}k`,
@@ -201,211 +209,59 @@ export default function Home() {
     return new Uint8Array(data);
   }
 
-  function cropForAspect(w,h){
-    const target=1080/1440;
-    const current=w/h;
-    let cw=w, ch=h, left=0, top=0;
-    if(current>target){
-      cw=h*target;
-      if(focus==='left') left=0;
-      else if(focus==='right') left=w-cw;
-      else left=(w-cw)/2;
-    } else if(current<target){
-      ch=w/target;
-      if(focus==='top') top=0;
-      else if(focus==='bottom') top=h-ch;
-      else top=(h-ch)/2;
-    }
-    return {left:Math.max(0,left),top:Math.max(0,top),width:Math.max(2,cw),height:Math.max(2,ch)};
-  }
-
-  async function fastExport(){
-    if(typeof VideoEncoder==='undefined') throw new Error('WebCodecs unavailable');
-
-    const {
-      Input, Output, Conversion, ALL_FORMATS, BlobSource,
-      Mp4OutputFormat, BufferTarget, canEncodeVideo, canEncodeAudio
-    } = await import('mediabunny');
-
-    const canAvc=await canEncodeVideo('avc',{width:1080,height:1440});
-    if(!canAvc) throw new Error('H264 hardware codec unavailable');
-    if(audio==='keep' && !(await canEncodeAudio('aac'))) throw new Error('AAC WebCodecs unavailable');
-    if(audio==='keep' && volume!==100) throw new Error('Custom volume uses fallback');
-
-    const input=new Input({
-      source:new BlobSource(file),
-      formats:ALL_FORMATS,
-    });
-    const target=new BufferTarget();
-    const output=new Output({
-      format:new Mp4OutputFormat(),
-      target,
-    });
-
-    const totalBps=Math.floor((TARGET_BYTES*8)/clipDuration);
-    const audioBps=audio==='mute'?0:64000;
-    const videoBps=Math.max(120000,totalBps-audioBps-24000);
-    let wmCanvas=null, wmCtx=null;
-
-    const conversion=await Conversion.init({
-      input,
-      output,
-      tracks:'primary',
-      trim:{start,end},
-      video: async track => {
-        const w=await track.getDisplayWidth();
-        const h=await track.getDisplayHeight();
-        const opts={
-          width:1080,
-          height:1440,
-          fit:cropMode==='fit'?'contain':'fill',
-          codec:'avc',
-          bitrate:videoBps,
-          frameRate:30,
-          hardwareAcceleration:'prefer-hardware',
-          forceTranscode:true,
-          keyFrameInterval:2,
-        };
-        if(cropMode==='cover') opts.crop=cropForAspect(w,h);
-        if(watermark.trim()){
-          opts.process=(sample)=>{
-            if(!wmCanvas){
-              wmCanvas=typeof OffscreenCanvas!=='undefined'
-                ? new OffscreenCanvas(1080,1440)
-                : Object.assign(document.createElement('canvas'),{width:1080,height:1440});
-              wmCtx=wmCanvas.getContext('2d');
-            }
-            wmCtx.clearRect(0,0,1080,1440);
-            sample.draw(wmCtx,0,0,1080,1440);
-            const text=watermark.trim();
-            const fs=48;
-            wmCtx.font=`800 ${fs}px Arial`;
-            wmCtx.textBaseline='middle';
-            const tw=wmCtx.measureText(text).width;
-            const pad=32;
-            let x=pad+tw/2, y=pad+fs/2;
-            if(wmPos==='tr'){x=1080-pad-tw/2;y=pad+fs/2;}
-            if(wmPos==='bl'){x=pad+tw/2;y=1440-pad-fs/2;}
-            if(wmPos==='br'){x=1080-pad-tw/2;y=1440-pad-fs/2;}
-            if(wmPos==='c'){x=540;y=720;}
-            wmCtx.textAlign='center';
-            wmCtx.globalAlpha=opacity/100;
-            wmCtx.lineWidth=7;
-            wmCtx.strokeStyle='rgba(0,0,0,.45)';
-            wmCtx.strokeText(text,x,y);
-            wmCtx.fillStyle='#fff';
-            wmCtx.fillText(text,x,y);
-            wmCtx.globalAlpha=1;
-            return wmCanvas;
-          };
-          opts.processedWidth=1080;
-          opts.processedHeight=1440;
-        }
-        return opts;
-      },
-      audio: audio==='mute'
-        ? {discard:true}
-        : {codec:'aac',bitrate:64000,forceTranscode:true},
-      tags:{},
-    });
-
-    if(!conversion.isValid) throw new Error('Fast conversion invalid');
-
-    let lastProgressAt=Date.now();
-    let lastProgressValue=0;
-    conversion.onProgress=(p)=>{
-      lastProgressAt=Date.now();
-      lastProgressValue=p||0;
-      // 100% callback hali MP4 finalization tugaganini anglatmaydi.
-      if(lastProgressValue>=0.98){
-        setProgress(98);
-        setMessage('MP4 fayl yakunlanmoqda...');
-      }else{
-        setProgress(Math.min(97,Math.round(lastProgressValue*100)));
-      }
-    };
-
-    setMessage('⚡ Hardware tezkor eksport...');
-
-    let watchdogId;
-    const stalled=new Promise((_,reject)=>{
-      watchdogId=setInterval(()=>{
-        const noProgressFor=Date.now()-lastProgressAt;
-        const limit=lastProgressValue>=0.95 ? 12000 : 30000;
-        if(noProgressFor>limit){
-          clearInterval(watchdogId);
-          conversion.cancel()
-            .catch(()=>{})
-            .finally(()=>reject(new Error('Hardware conversion stalled')));
-        }
-      },1000);
-    });
-
-    try{
-      await Promise.race([conversion.execute(),stalled]);
-    }finally{
-      clearInterval(watchdogId);
-    }
-
-    const buffer=target.buffer;
-    if(!buffer) throw new Error('No output buffer');
-    return new Uint8Array(buffer);
-  }
-
   async function exportVideo(){
     if(!file) return;
     setStatus('processing');
     setProgress(1);
-    setMessage('Tezkor eksport tayyorlanmoqda...');
+    setMessage('Tez eksport tayyorlanmoqda...');
     setOutUrl('');
     setOutSize(0);
 
     try{
-      let result;
-      try{
-        result=await fastExport();
-        if(result.byteLength>MAX_BYTES){
-          // Hardware encoderlar target bitrate’dan biroz oshishi mumkin.
-          // Limit oshsa eski aniq FFmpeg yo‘li faqat shu holatda ishlaydi.
-          throw new Error('Fast output exceeded 3 MB');
-        }
-      }catch(fastErr){
-        console.warn('Fast path fallback:',fastErr);
+      const ffmpeg=await loadEngine();
+      const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
+      const inputName=`input.${ext||'mp4'}`;
+      await ffmpeg.writeFile(inputName,await fetchFile(file));
+
+      const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
+      const audioK=audio==='mute'?0:Math.max(32,Math.min(80,Math.floor(totalK*.13)));
+      let videoK=Math.max(80,totalK-audioK-24);
+      const hasWM=await makeWatermark(ffmpeg);
+
+      setMessage(engineModeRef.current==='multi'
+        ? 'Ko‘p yadroli tez siqish...'
+        : 'Tez siqish...');
+
+      let result=await encode(ffmpeg,inputName,videoK,1,hasWM);
+
+      // Faqat limit oshib ketsa bitta qo‘shimcha urinish.
+      if(result.byteLength>MAX_BYTES){
         setProgress(1);
-        setMessage('Hardware yo‘l javob bermadi — avtomatik zaxira rejimiga o‘tildi...');
-        const ffmpeg=await loadEngine();
-        const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
-        const inputName=`input.${ext||'mp4'}`;
-        await ffmpeg.writeFile(inputName,await fetchFile(file));
-        const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
-        const audioK=audio==='mute'?0:Math.max(32,Math.min(96,Math.floor(totalK*.16)));
-        let videoK=Math.max(80,totalK-audioK-18);
-        const hasWM=await makeWatermark(ffmpeg);
-        result=await encode(ffmpeg,inputName,videoK,1,hasWM);
-        if(result.byteLength>MAX_BYTES){
-          videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.90));
-          result=await encode(ffmpeg,inputName,videoK,2,hasWM);
-        }
-        try{await ffmpeg.deleteFile(inputName);}catch{}
-        if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
+        setMessage('3 MB limitga moslayapman...');
+        videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.88));
+        result=await encode(ffmpeg,inputName,videoK,2,hasWM);
       }
+
+      try{await ffmpeg.deleteFile(inputName);}catch{}
+      if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
 
       const blob=new Blob([result],{type:'video/mp4'});
       const u=URL.createObjectURL(blob);
       setOutUrl(u);
       setOutSize(blob.size);
       setProgress(100);
+
       if(blob.size<=MAX_BYTES){
         setStatus('done');
         setMessage('Tayyor — video 3 MB limit ichida.');
-      } else {
+      }else{
         setStatus('warning');
         setMessage('Video tayyor, lekin 3 MB dan biroz katta. Qisqaroq qirqib qayta urinib ko‘ring.');
       }
     }catch(e){
       console.error(e);
       setStatus('error');
-      setMessage('Qayta ishlashda xato yuz berdi. Chrome/Edge brauzerida qayta urinib ko‘ring.');
+      setMessage('Eksportda xato yuz berdi. Sahifani yangilab, Chrome yoki Edge’da qayta urinib ko‘ring.');
     }
   }
 
