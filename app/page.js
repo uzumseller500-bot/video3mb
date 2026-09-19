@@ -8,7 +8,7 @@ const MAX_BYTES = 3 * 1024 * 1024;
 // 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
 const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
 const GOOD_VIDEO_K = 900;
-const MIN_VIDEO_K = 320;
+const MIN_VIDEO_K = 80;
 const AUDIO_K = 64;
 
 const fmtTime = (s=0) => {
@@ -202,14 +202,14 @@ export default function Home() {
     return 'atempo=2,atempo=2,atempo='+(v/4);
   }
 
-  async function encode(ffmpeg,inputName,videoK,attempt,hasWM){
+  async function encode(ffmpeg,inputName,videoK,attempt,hasWM,audioBitrateK=AUDIO_K){
     const out='out-'+attempt+'.mp4';
     const args=['-ss',start.toFixed(3),'-i',inputName];
     if(hasWM) args.push('-loop','1','-i','wm.png');
-    args.push('-t',clipDuration.toFixed(3));
+    args.push('-t',outputDuration.toFixed(3));
 
     if(hasWM){
-      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+'[v]','-map','[v]','-map','0:a?');
+      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':shortest=1[v]','-map','[v]','-map','0:a?');
     }else{
       args.push('-vf',baseFilter());
     }
@@ -224,7 +224,7 @@ export default function Home() {
     if(audio==='mute'){
       args.push('-an');
     }else{
-      args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:AUDIO_K)+'k');
+      args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:audioBitrateK)+'k');
       const af=[];
       if(speed!==1) af.push(audioTempoFilter(speed));
       if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
@@ -254,18 +254,22 @@ export default function Home() {
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
       const totalK=Math.floor((TARGET_BYTES*8)/outputDuration/1000);
-      const audioK=audio==='mute'?0:AUDIO_K;
-      let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-24);
+      let audioK=audio==='mute'?0:Math.max(24,Math.min(AUDIO_K,Math.floor(totalK*0.10)));
+      let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
       const hasWM=await makeWatermark(ffmpeg);
 
       setMessage(exportMode==='4k' ? '4K 2160×2880 kodlanmoqda — bu rejim sekinroq...' : (engineModeRef.current==='multi'?'Ko‘p yadroli tiniq siqish...':'Tiniq siqish...'));
-      let result=await encode(ffmpeg,inputName,videoK,1,hasWM);
+      let result=await encode(ffmpeg,inputName,videoK,1,hasWM,audioK);
 
-      if(exportMode==='3mb' && result.byteLength>MAX_BYTES){
-        setProgress(1);
-        setMessage('3 MB limitga aniq moslayapman...');
-        videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*0.90));
-        result=await encode(ffmpeg,inputName,videoK,2,hasWM);
+      if(exportMode==='3mb'){
+        for(let attempt=2; attempt<=5 && result.byteLength>MAX_BYTES; attempt++){
+          setProgress(1);
+          setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/5...');
+          const ratio=TARGET_BYTES/result.byteLength;
+          videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*0.88));
+          if(audio!=='mute') audioK=Math.max(24,Math.floor(audioK*ratio*0.94));
+          result=await encode(ffmpeg,inputName,videoK,attempt,hasWM,audioK);
+        }
       }
 
       try{await ffmpeg.deleteFile(inputName);}catch{}
@@ -285,7 +289,7 @@ export default function Home() {
         setMessage('Tayyor — 1080×1440, tiniq va 3 MB limit ichida.');
       }else{
         setStatus('warning');
-        setMessage('3 MB limitda sifatni saqlab bo‘lmadi. Videoni yana biroz qisqartiring.');
+        setMessage('Video tayyor, lekin 3 MB limit juda qattiq bo‘lgani uchun hajm biroz oshdi. 3× yoki ovozsiz rejim yanada kichraytiradi.');
       }
     }catch(e){
       console.error(e);
