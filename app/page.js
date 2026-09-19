@@ -5,7 +5,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const MAX_BYTES = 3 * 1024 * 1024;
-const TARGET_BYTES = Math.floor(2.88 * 1024 * 1024);
+// 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.\nconst TARGET_BYTES = Math.floor(2.68 * 1024 * 1024);
 
 const fmtTime = (s=0) => {
   s = Math.max(0, Math.floor(s));
@@ -31,7 +31,7 @@ export default function Home() {
   const [message,setMessage] = useState('');
   const [outUrl,setOutUrl] = useState('');
   const [outSize,setOutSize] = useState(0);
-  const ffmpegRef = useRef(null);
+  const ffmpegRef = useRef(null);\n  const enginePromiseRef = useRef(null);\n  const engineModeRef = useRef('single');
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
 
@@ -41,7 +41,19 @@ export default function Home() {
   },[src,outUrl]);
 
   function pick(f){
-    if(!f || !f.type.startsWith('video/')) return setMessage('Video fayl tanlang.');
+    if(!f){
+      setFile(null);
+      if(src) URL.revokeObjectURL(src);
+      if(outUrl) URL.revokeObjectURL(outUrl);
+      setSrc('');
+      setOutUrl('');
+      setOutSize(0);
+      setStatus('idle');
+      setMessage('');
+      setProgress(0);
+      return;
+    }
+    if(!f.type.startsWith('video/')) return setMessage('Video fayl tanlang.');
     if(src) URL.revokeObjectURL(src);
     if(outUrl) URL.revokeObjectURL(outUrl);
     setFile(f);
@@ -49,22 +61,66 @@ export default function Home() {
     setOutUrl('');
     setOutSize(0);
     setStatus('idle');
-    setMessage('');
+    setMessage('Tezkor dvigatel tayyorlanmoqda...');
     setProgress(0);
+    // Foydalanuvchi sozlamalarni tanlayotgan paytda FFmpeg oldindan yuklanadi.
+    setTimeout(() => {
+      loadEngine(true)
+        .then(() => setMessage('Tezkor rejim tayyor.'))
+        .catch(() => setMessage('Dvigatel eksport vaqtida yuklanadi.'));
+    }, 50);
   }
 
-  async function loadEngine(){
+  async function loadEngine(silent=false){
     if(ffmpegRef.current) return ffmpegRef.current;
-    setMessage('Video dvigateli yuklanmoqda...');
-    const ffmpeg = new FFmpeg();
-    ffmpeg.on('progress',({progress:p})=>setProgress(Math.min(99,Math.round((p||0)*100))));
-    const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')
-    });
-    ffmpegRef.current=ffmpeg;
-    return ffmpeg;
+    if(enginePromiseRef.current) return enginePromiseRef.current;
+    if(!silent) setMessage('Video dvigateli yuklanmoqda...');
+
+    enginePromiseRef.current=(async()=>{
+      const makeFFmpeg=()=>{
+        const ffmpeg=new FFmpeg();
+        ffmpeg.on('progress',({progress:p})=>setProgress(Math.min(99,Math.round((p||0)*100))));
+        return ffmpeg;
+      };
+
+      const canMulti = typeof crossOriginIsolated !== 'undefined'
+        && crossOriginIsolated
+        && typeof navigator !== 'undefined'
+        && (navigator.hardwareConcurrency || 1) >= 4;
+
+      if(canMulti){
+        try{
+          const ffmpeg=makeFFmpeg();
+          const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
+          await ffmpeg.load({
+            coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
+            wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm'),
+            workerURL: await toBlobURL(`${base}/ffmpeg-core.worker.js`,'text/javascript')
+          });
+          engineModeRef.current='multi';
+          ffmpegRef.current=ffmpeg;
+          return ffmpeg;
+        }catch(err){
+          console.warn('Multi-thread FFmpeg ishlamadi, single-threadga o‘tiladi',err);
+        }
+      }
+
+      const ffmpeg=makeFFmpeg();
+      const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
+        wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')
+      });
+      engineModeRef.current='single';
+      ffmpegRef.current=ffmpeg;
+      return ffmpeg;
+    })();
+
+    try{
+      return await enginePromiseRef.current;
+    } finally {
+      enginePromiseRef.current=null;
+    }
   }
 
   function overlayPos(){
@@ -126,7 +182,7 @@ export default function Home() {
     }
 
     args.push(
-      '-c:v','libx264','-preset','veryfast','-pix_fmt','yuv420p',
+      '-c:v','libx264','-preset','superfast','-pix_fmt','yuv420p',
       '-b:v',`${Math.max(80,Math.floor(videoK))}k`,
       '-maxrate',`${Math.max(90,Math.floor(videoK*1.06))}k`,
       '-bufsize',`${Math.max(160,Math.floor(videoK*2))}k`,
@@ -165,13 +221,14 @@ export default function Home() {
       const audioK=audio==='mute'?0:Math.max(32,Math.min(96,Math.floor(totalK*.16)));
       let videoK=Math.max(80,totalK-audioK-18);
       const hasWM=await makeWatermark(ffmpeg);
-      let result;
+      setMessage(engineModeRef.current==='multi' ? 'Tezkor ko‘p yadroli siqish...' : 'Tezkor siqish...');
+      let result=await encode(ffmpeg,inputName,videoK,1,hasWM);
 
-      for(let i=1;i<=3;i++){
-        setMessage(`Siqilmoqda — ${i}-bosqich...`);
-        result=await encode(ffmpeg,inputName,videoK,i,hasWM);
-        if(result.byteLength<=MAX_BYTES) break;
-        videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.93));
+      // Faqat kamdan-kam hollarda limit oshsa, bitta qo‘shimcha urinish.
+      if(result.byteLength>MAX_BYTES){
+        setMessage('Hajmni 3 MB ga aniq moslayapman...');
+        videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.90));
+        result=await encode(ffmpeg,inputName,videoK,2,hasWM);
       }
 
       try{await ffmpeg.deleteFile(inputName);}catch{}
