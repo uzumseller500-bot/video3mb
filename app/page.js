@@ -353,8 +353,13 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="target"><div><small>FORMAT</small><b>1080×1440</b></div><div><small>MAX HAJM</small><b>3.00 MB</b></div></div>
-        <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?`TAYYORLANMOQDA ${progress}%`:'VIDEONI TAYYORLASH'}</button>
+        <div className="target">
+          <div><small>FORMAT</small><b>{exportMode==='4k'?'2160×2880 · 4K':'1080×1440'}</b></div>
+          <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
+        </div>
+        {exportMode==='3mb' && clipDuration>maxClearSeconds && <div className="msg warning">Tiniq 3 MB uchun videoni {maxClearSeconds} sekundgacha qirqing. Hozir: {Math.ceil(clipDuration)} sek.</div>}
+        {exportMode==='4k' && <div className="msg">4K rejim fayl hajmini cheklamaydi. Sifat maksimal, eksport 1080 rejimdan sekinroq.</div>}
+        <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?'4K MAX SIFATDA TAYYORLASH':'3 MB TINIQ VIDEO TAYYORLASH')}</button>
         {status==='processing' && <div className="bar"><i style={{width:`${progress}%`}}/></div>}
         {message && <div className={`msg ${status}`}>{message}</div>}
         {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download="video-1080x1440-3mb.mp4">YUKLAB OLISH</a></div>}
