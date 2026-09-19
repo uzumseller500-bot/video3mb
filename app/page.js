@@ -7,7 +7,8 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util';
 const MAX_BYTES = 3 * 1024 * 1024;
 // 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
 const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
-const MIN_CLEAR_VIDEO_K = 1400;
+const GOOD_VIDEO_K = 900;
+const MIN_VIDEO_K = 320;
 const AUDIO_K = 64;
 
 const fmtTime = (s=0) => {
@@ -44,12 +45,12 @@ export default function Home() {
   const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
   const maxClearSeconds = useMemo(()=>{
     const audioK=audio==='mute'?0:AUDIO_K;
-    return Math.max(1,Math.floor((TARGET_BYTES*8/1000)/(MIN_CLEAR_VIDEO_K+audioK+24)));
+    return Math.max(1,Math.floor((TARGET_BYTES*8/1000)/(GOOD_VIDEO_K+audioK+24)));
   },[audio]);
   const recommendedSpeed = useMemo(()=>{
-    const choices=[1,1.25,1.5,1.75,2];
+    const choices=[1,1.25,1.5,1.75,2,2.5,3];
     const need=clipDuration/maxClearSeconds;
-    return choices.find(v=>v>=need) || 2;
+    return choices.find(v=>v>=need) || 3;
   },[clipDuration,maxClearSeconds]);
 
   useEffect(()=>()=> {
@@ -195,6 +196,12 @@ export default function Home() {
     return true;
   }
 
+  function audioTempoFilter(v){
+    if(v<=2) return 'atempo='+v;
+    if(v<=4) return 'atempo=2,atempo='+(v/2);
+    return 'atempo=2,atempo=2,atempo='+(v/4);
+  }
+
   async function encode(ffmpeg,inputName,videoK,attempt,hasWM){
     const out='out-'+attempt+'.mp4';
     const args=['-ss',start.toFixed(3),'-i',inputName];
@@ -210,7 +217,7 @@ export default function Home() {
     if(exportMode==='4k'){
       args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','5.1','-crf','19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
     }else{
-      const vk=Math.max(MIN_CLEAR_VIDEO_K,Math.floor(videoK));
+      const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
       args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.04)+'k','-bufsize',Math.floor(vk*2)+'k','-movflags','+faststart');
     }
 
@@ -219,7 +226,7 @@ export default function Home() {
     }else{
       args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:AUDIO_K)+'k');
       const af=[];
-      if(speed!==1) af.push('atempo='+speed);
+      if(speed!==1) af.push(audioTempoFilter(speed));
       if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
       if(af.length) args.push('-af',af.join(','));
     }
@@ -233,13 +240,6 @@ export default function Home() {
 
   async function exportVideo(){
     if(!file) return;
-
-    if(exportMode==='3mb' && outputDuration>maxClearSeconds){
-      setStatus('warning');
-      setProgress(0);
-      setMessage('3 MB ichida tiniq chiqishi uchun tezlikni '+recommendedSpeed+'× ga oshiring yoki videoni qisqartiring. Chiqish davomiyligi hozir '+Math.ceil(outputDuration)+' sekund.');
-      return;
-    }
 
     setStatus('processing');
     setProgress(1);
@@ -255,7 +255,7 @@ export default function Home() {
 
       const totalK=Math.floor((TARGET_BYTES*8)/outputDuration/1000);
       const audioK=audio==='mute'?0:AUDIO_K;
-      let videoK=Math.max(MIN_CLEAR_VIDEO_K,totalK-audioK-24);
+      let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-24);
       const hasWM=await makeWatermark(ffmpeg);
 
       setMessage(exportMode==='4k' ? '4K 2160×2880 kodlanmoqda — bu rejim sekinroq...' : (engineModeRef.current==='multi'?'Ko‘p yadroli tiniq siqish...':'Tiniq siqish...'));
@@ -264,7 +264,7 @@ export default function Home() {
       if(exportMode==='3mb' && result.byteLength>MAX_BYTES){
         setProgress(1);
         setMessage('3 MB limitga aniq moslayapman...');
-        videoK=Math.max(MIN_CLEAR_VIDEO_K,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*0.90));
+        videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*0.90));
         result=await encode(ffmpeg,inputName,videoK,2,hasWM);
       }
 
@@ -347,11 +347,11 @@ export default function Home() {
         <div className="block">
           <h3>3. Tezlik</h3>
           <div className="seg">
-            {[1,1.25,1.5,1.75,2].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
+            {[1,1.25,1.5,1.75,2,2.5,3].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
           </div>
           <div className="msg">
             Chiqish: {Math.ceil(outputDuration)} sek. · Tavsiya: <b>{recommendedSpeed}×</b>
-            {recommendedSpeed===2 && outputDuration>maxClearSeconds ? ' + qirqish' : ''}
+            {recommendedSpeed===3 && outputDuration>maxClearSeconds ? ' + kerak bo‘lsa qirqish' : ''}
           </div>
         </div>
 
@@ -380,12 +380,13 @@ export default function Home() {
           <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
           <div><small>TEZLIK</small><b>{speed}×</b></div>
         </div>
-        {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB tiniqlik uchun {recommendedSpeed}× tezlikni tanlang{recommendedSpeed===2?' va kerak bo‘lsa videoni biroz qirqing':''}. Hozirgi chiqish: {Math.ceil(outputDuration)} sek.</div>}
+        {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB uchun tavsiya: {recommendedSpeed}×. Hozirgi chiqish: {Math.ceil(outputDuration)} sek. Eksport baribir ishlaydi.</div>}
+        {exportMode==='3mb' && Math.floor((TARGET_BYTES*8)/outputDuration/1000)-(audio==='mute'?0:AUDIO_K)-24 < GOOD_VIDEO_K && <div className="msg warning">Video uzunligi sabab sifat pasayishi mumkin. 2×–3× tezlik yoki qirqish tiniqlikni oshiradi.</div>}
         {exportMode==='4k' && <div className="msg">4K rejim fayl hajmini cheklamaydi. Sifat maksimal, eksport 1080 rejimdan sekinroq.</div>}
         <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?'4K MAX SIFATDA TAYYORLASH':'3 MB TINIQ VIDEO TAYYORLASH')}</button>
         {status==='processing' && <div className="bar"><i style={{width:`${progress}%`}}/></div>}
         {message && <div className={`msg ${status}`}>{message}</div>}
-        {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download="video-1080x1440-3mb.mp4">YUKLAB OLISH</a></div>}
+        {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {exportMode==='4k'?'4K 2160×2880':'1080×1440'} · {speed}× · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download={exportMode==='4k'?'video-4k-2160x2880.mp4':'video-1080x1440-3mb.mp4'}>YUKLAB OLISH</a></div>}
       </div>
     </section>
   </main>;
