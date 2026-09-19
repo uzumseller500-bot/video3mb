@@ -285,7 +285,7 @@ export default function Home() {
 
   if(!file){
     return <main className="shell">
-      <header><div className="logo">VIDEO<span>3MB</span></div><div className="chip">1080×1440 · MP4</div></header>
+      <header><div className="logo">VIDEO<span>3MB</span></div><div className="chip">1080×1440 · 3 MB + 4K</div></header>
       <section className="hero">
         <div className="kicker">MARKETPLACE VIDEO TOOL</div>
         <h1>Videoni <span>3 MB</span> gacha tayyorlang</h1>
@@ -319,7 +319,11 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>2. 1080×1440 crop</h3>
+          <h3>2. Format va crop</h3>
+          <div className="seg">
+            <button className={exportMode==='3mb'?'on':''} onClick={()=>setExportMode('3mb')}>1080×1440 · 3 MB</button>
+            <button className={exportMode==='4k'?'on':''} onClick={()=>setExportMode('4k')}>4K · 2160×2880</button>
+          </div>
           <div className="seg">
             <button className={cropMode==='cover'?'on':''} onClick={()=>setCropMode('cover')}>3:4 Crop</button>
             <button className={cropMode==='fit'?'on':''} onClick={()=>setCropMode('fit')}>To‘liq sig‘dirish</button>
