@@ -26,6 +26,7 @@ export default function Home() {
   const [focus,setFocus] = useState('center');
   const [audio,setAudio] = useState('keep');
   const [volume,setVolume] = useState(100);
+  const [speed,setSpeed] = useState(1);
   const [watermark,setWatermark] = useState('');
   const [wmPos,setWmPos] = useState('br');
   const [opacity,setOpacity] = useState(70);
@@ -40,10 +41,16 @@ export default function Home() {
   const engineModeRef = useRef('single');
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
+  const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
   const maxClearSeconds = useMemo(()=>{
     const audioK=audio==='mute'?0:AUDIO_K;
     return Math.max(1,Math.floor((TARGET_BYTES*8/1000)/(MIN_CLEAR_VIDEO_K+audioK+24)));
   },[audio]);
+  const recommendedSpeed = useMemo(()=>{
+    const choices=[1,1.25,1.5,1.75,2];
+    const need=clipDuration/maxClearSeconds;
+    return choices.find(v=>v>=need) || 2;
+  },[clipDuration,maxClearSeconds]);
 
   useEffect(()=>()=> {
     if(src) URL.revokeObjectURL(src);
@@ -149,9 +156,10 @@ export default function Home() {
     const h=is4k?2880:1440;
     const fps=is4k?30:24;
     const sharp=is4k?'unsharp=5:5:0.55:3:3:0.25':'unsharp=5:5:0.35:3:3:0.15';
+    const speedFilter=speed===1?'':',setpts=PTS/'+speed;
 
     if(cropMode==='fit'){
-      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags=lanczos,pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black,'+sharp+',fps='+fps;
+      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags=lanczos,pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black,'+sharp+',fps='+fps+speedFilter;
     }
     const pos={
       center:'(iw-'+w+')/2:(ih-'+h+')/2',
@@ -161,7 +169,7 @@ export default function Home() {
       right:'iw-'+w+':(ih-'+h+')/2'
     }[focus] || ('(iw-'+w+')/2:(ih-'+h+')/2');
 
-    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags=lanczos,crop='+w+':'+h+':'+pos+','+sharp+',fps='+fps;
+    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags=lanczos,crop='+w+':'+h+':'+pos+','+sharp+',fps='+fps+speedFilter;
   }
 
   async function makeWatermark(ffmpeg){
@@ -210,7 +218,10 @@ export default function Home() {
       args.push('-an');
     }else{
       args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:AUDIO_K)+'k');
-      if(volume!==100) args.push('-af','volume='+(volume/100).toFixed(2));
+      const af=[];
+      if(speed!==1) af.push('atempo='+speed);
+      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
+      if(af.length) args.push('-af',af.join(','));
     }
 
     args.push('-y',out);
@@ -223,10 +234,10 @@ export default function Home() {
   async function exportVideo(){
     if(!file) return;
 
-    if(exportMode==='3mb' && clipDuration>maxClearSeconds){
+    if(exportMode==='3mb' && outputDuration>maxClearSeconds){
       setStatus('warning');
       setProgress(0);
-      setMessage('3 MB ichida tiniq 1080×1440 chiqishi uchun videoni '+maxClearSeconds+' sekundgacha qirqing. Hozirgi video '+Math.ceil(clipDuration)+' sekund.');
+      setMessage('3 MB ichida tiniq chiqishi uchun tezlikni '+recommendedSpeed+'× ga oshiring yoki videoni qisqartiring. Chiqish davomiyligi hozir '+Math.ceil(outputDuration)+' sekund.');
       return;
     }
 
@@ -242,7 +253,7 @@ export default function Home() {
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
-      const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
+      const totalK=Math.floor((TARGET_BYTES*8)/outputDuration/1000);
       const audioK=audio==='mute'?0:AUDIO_K;
       let videoK=Math.max(MIN_CLEAR_VIDEO_K,totalK-audioK-24);
       const hasWM=await makeWatermark(ffmpeg);
@@ -334,7 +345,18 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>3. Ovoz</h3>
+          <h3>3. Tezlik</h3>
+          <div className="seg">
+            {[1,1.25,1.5,1.75,2].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
+          </div>
+          <div className="msg">
+            Chiqish: {Math.ceil(outputDuration)} sek. · Tavsiya: <b>{recommendedSpeed}×</b>
+            {recommendedSpeed===2 && outputDuration>maxClearSeconds ? ' + qirqish' : ''}
+          </div>
+        </div>
+
+        <div className="block">
+          <h3>4. Ovoz</h3>
           <div className="seg">
             <button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button>
             <button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button>
@@ -343,7 +365,7 @@ export default function Home() {
         </div>
 
         <div className="block">
-          <h3>4. Suv belgisi</h3>
+          <h3>5. Suv belgisi</h3>
           <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)} />
           <div className="row">
             <select value={wmPos} onChange={e=>setWmPos(e.target.value)}>
@@ -356,8 +378,9 @@ export default function Home() {
         <div className="target">
           <div><small>FORMAT</small><b>{exportMode==='4k'?'2160×2880 · 4K':'1080×1440'}</b></div>
           <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
+          <div><small>TEZLIK</small><b>{speed}×</b></div>
         </div>
-        {exportMode==='3mb' && clipDuration>maxClearSeconds && <div className="msg warning">Tiniq 3 MB uchun videoni {maxClearSeconds} sekundgacha qirqing. Hozir: {Math.ceil(clipDuration)} sek.</div>}
+        {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB tiniqlik uchun {recommendedSpeed}× tezlikni tanlang{recommendedSpeed===2?' va kerak bo‘lsa videoni biroz qirqing':''}. Hozirgi chiqish: {Math.ceil(outputDuration)} sek.</div>}
         {exportMode==='4k' && <div className="msg">4K rejim fayl hajmini cheklamaydi. Sifat maksimal, eksport 1080 rejimdan sekinroq.</div>}
         <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?'4K MAX SIFATDA TAYYORLASH':'3 MB TINIQ VIDEO TAYYORLASH')}</button>
         {status==='processing' && <div className="bar"><i style={{width:`${progress}%`}}/></div>}
