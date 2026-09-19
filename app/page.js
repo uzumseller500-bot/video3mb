@@ -188,34 +188,29 @@ export default function Home() {
   }
 
   async function encode(ffmpeg,inputName,videoK,attempt,hasWM){
-    const out=`out-${attempt}.mp4`;
+    const out='out-'+attempt+'.mp4';
     const args=['-ss',start.toFixed(3),'-i',inputName];
     if(hasWM) args.push('-loop','1','-i','wm.png');
     args.push('-t',clipDuration.toFixed(3));
 
     if(hasWM){
-      args.push(
-        '-filter_complex',`[0:v]${baseFilter()}[base];[base][1:v]overlay=${overlayPos()}[v]`,
-        '-map','[v]','-map','0:a?'
-      );
-    } else {
+      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+'[v]','-map','[v]','-map','0:a?');
+    }else{
       args.push('-vf',baseFilter());
     }
 
-    args.push(
-      '-c:v','libx264','-preset','ultrafast','-tune','fastdecode','-threads','4','-pix_fmt','yuv420p',
-      '-b:v',`${Math.max(80,Math.floor(videoK))}k`,
-      '-maxrate',`${Math.max(90,Math.floor(videoK*1.06))}k`,
-      '-bufsize',`${Math.max(160,Math.floor(videoK*2))}k`,
-      '-movflags','+faststart'
-    );
+    if(exportMode==='4k'){
+      args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','5.1','-crf','19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
+    }else{
+      const vk=Math.max(MIN_CLEAR_VIDEO_K,Math.floor(videoK));
+      args.push('-c:v','libx264','-preset','veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.04)+'k','-bufsize',Math.floor(vk*2)+'k','-movflags','+faststart');
+    }
 
-    if(audio==='mute') {
+    if(audio==='mute'){
       args.push('-an');
-    } else {
-      const audioK=Math.max(32,Math.min(96,Math.floor(videoK*.16)));
-      args.push('-c:a','aac','-b:a',`${audioK}k`);
-      if(volume!==100) args.push('-af',`volume=${(volume/100).toFixed(2)}`);
+    }else{
+      args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:AUDIO_K)+'k');
+      if(volume!==100) args.push('-af','volume='+(volume/100).toFixed(2));
     }
 
     args.push('-y',out);
@@ -227,34 +222,38 @@ export default function Home() {
 
   async function exportVideo(){
     if(!file) return;
+
+    if(exportMode==='3mb' && clipDuration>maxClearSeconds){
+      setStatus('warning');
+      setProgress(0);
+      setMessage('3 MB ichida tiniq 1080×1440 chiqishi uchun videoni '+maxClearSeconds+' sekundgacha qirqing. Hozirgi video '+Math.ceil(clipDuration)+' sekund.');
+      return;
+    }
+
     setStatus('processing');
     setProgress(1);
-    setMessage('Tez eksport tayyorlanmoqda...');
+    setMessage(exportMode==='4k'?'4K maksimal sifat tayyorlanmoqda...':'Tiniq 3 MB eksport tayyorlanmoqda...');
     setOutUrl('');
     setOutSize(0);
 
     try{
       const ffmpeg=await loadEngine();
       const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
-      const inputName=`input.${ext||'mp4'}`;
+      const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
       const totalK=Math.floor((TARGET_BYTES*8)/clipDuration/1000);
-      const audioK=audio==='mute'?0:Math.max(32,Math.min(80,Math.floor(totalK*.13)));
-      let videoK=Math.max(80,totalK-audioK-24);
+      const audioK=audio==='mute'?0:AUDIO_K;
+      let videoK=Math.max(MIN_CLEAR_VIDEO_K,totalK-audioK-24);
       const hasWM=await makeWatermark(ffmpeg);
 
-      setMessage(engineModeRef.current==='multi'
-        ? 'Ko‘p yadroli tez siqish...'
-        : 'Tez siqish...');
-
+      setMessage(exportMode==='4k' ? '4K 2160×2880 kodlanmoqda — bu rejim sekinroq...' : (engineModeRef.current==='multi'?'Ko‘p yadroli tiniq siqish...':'Tiniq siqish...'));
       let result=await encode(ffmpeg,inputName,videoK,1,hasWM);
 
-      // Faqat limit oshib ketsa bitta qo‘shimcha urinish.
-      if(result.byteLength>MAX_BYTES){
+      if(exportMode==='3mb' && result.byteLength>MAX_BYTES){
         setProgress(1);
-        setMessage('3 MB limitga moslayapman...');
-        videoK=Math.max(70,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*.88));
+        setMessage('3 MB limitga aniq moslayapman...');
+        videoK=Math.max(MIN_CLEAR_VIDEO_K,Math.floor(videoK*(TARGET_BYTES/result.byteLength)*0.90));
         result=await encode(ffmpeg,inputName,videoK,2,hasWM);
       }
 
@@ -267,17 +266,20 @@ export default function Home() {
       setOutSize(blob.size);
       setProgress(100);
 
-      if(blob.size<=MAX_BYTES){
+      if(exportMode==='4k'){
         setStatus('done');
-        setMessage('Tayyor — video 3 MB limit ichida.');
+        setMessage('4K MAX sifat tayyor — 2160×2880.');
+      }else if(blob.size<=MAX_BYTES){
+        setStatus('done');
+        setMessage('Tayyor — 1080×1440, tiniq va 3 MB limit ichida.');
       }else{
         setStatus('warning');
-        setMessage('Video tayyor, lekin 3 MB dan biroz katta. Qisqaroq qirqib qayta urinib ko‘ring.');
+        setMessage('3 MB limitda sifatni saqlab bo‘lmadi. Videoni yana biroz qisqartiring.');
       }
     }catch(e){
       console.error(e);
       setStatus('error');
-      setMessage('Eksportda xato yuz berdi. Sahifani yangilab, Chrome yoki Edge’da qayta urinib ko‘ring.');
+      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun. Qisqaroq video bilan urinib ko‘ring.' : 'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.');
     }
   }
 
