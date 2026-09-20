@@ -413,93 +413,202 @@ export default function Home() {
     </main>;
   }
 
-  return <main className="shell">
-    <header><div className="logo">VIDEO<span>3MB</span></div><button className="linkBtn" onClick={()=>pick(null)}>Yangi video</button></header>
-    <section className="work">
-      <div className="preview card">
-        <video src={src} controls onLoadedMetadata={e=>{const d=e.currentTarget.duration||0;setDuration(d);setStart(0);setEnd(d)}} />
-        {watermark && <div className={`wm ${wmPos}`} style={{opacity:opacity/100}}>{watermark}</div>}
-        <div className="meta"><span>{file.name}</span><span>{fmtSize(file.size)}</span><span>{fmtTime(duration)}</span></div>
+  return <main className="editorShell">
+    <header className="editorTopbar">
+      <div className="logo">VIDEO<span>3MB</span><em> V2</em></div>
+      <div className="topActions">
+        <button className="ghostBtn" onClick={()=>pick(null)}>＋ Yangi video</button>
+        <button className="autoBtn" onClick={applyUzumAuto}>✦ UZUM AUTO</button>
       </div>
+    </header>
 
-      <div className="controls card">
-        <div className="block">
-          <h3>1. Qirqish</h3>
-          <label>Boshi <input type="range" min="0" max={Math.max(0,end-.1)} step=".1" value={start} onChange={e=>setStart(Math.min(+e.target.value,end-.1))}/><b>{fmtTime(start)}</b></label>
-          <label>Oxiri <input type="range" min={Math.min(duration,start+.1)} max={duration} step=".1" value={end} onChange={e=>setEnd(Math.max(+e.target.value,start+.1))}/><b>{fmtTime(end)}</b></label>
+    <section className="editorLayout">
+      <aside className="toolRail">
+        {[
+          ['auto','✦','Auto'],
+          ['crop','▣','Crop'],
+          ['trim','✂','Qirqish'],
+          ['speed','⚡','Tezlik'],
+          ['audio','♪','Ovoz'],
+          ['wm','T','Matn'],
+          ['export','⇩','Export']
+        ].map(([id,icon,label])=>
+          <button key={id} className={activeTool===id?'active':''} onClick={()=>setActiveTool(id)}>
+            <span>{icon}</span><small>{label}</small>
+          </button>
+        )}
+      </aside>
+
+      <section className="stageColumn">
+        <div className="stageToolbar">
+          <div>
+            <strong>{file.name}</strong>
+            <span>{sourceW||'—'}×{sourceH||'—'} · {fmtSize(file.size)} · {fmtTime(duration)}</span>
+          </div>
+          <div className="stageBadges">
+            <b>3:4</b><b>1080×1440</b><b>≤3 MB</b>
+          </div>
         </div>
 
-        <div className="block">
-          <h3>2. Format va crop</h3>
-          <div className="seg">
-            <button className={exportMode==='3mb'?'on':''} onClick={()=>setExportMode('3mb')}>UZUM · 1080×1440 · ≤3 MB</button>
-            <button className={exportMode==='4k'?'on':''} onClick={()=>setExportMode('4k')}>4K · 2160×2880</button>
+        <div className="canvasWrap">
+          <div
+            className="videoCanvas"
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerUp={onCanvasPointerUp}
+            onPointerCancel={onCanvasPointerUp}
+          >
+            <video
+              ref={videoRef}
+              src={src}
+              controls
+              style={{
+                objectFit:cropMode==='cover'?'cover':'contain',
+                objectPosition:focusX+'% '+focusY+'%'
+              }}
+              onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime||0)}
+              onLoadedMetadata={e=>{
+                const v=e.currentTarget;
+                const d=v.duration||0;
+                setDuration(d);setStart(0);setEnd(d);
+                setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);
+              }}
+            />
+            {cropMode==='cover' && <div className="dragHint">↔ Videoni tortib markazni tanlang</div>}
+            <div className="safeFrame"><span>UZUM 1080×1440</span></div>
+            {watermark && <div className={'wm '+wmPos} style={{opacity:opacity/100}}>{watermark}</div>}
           </div>
-          <div className="seg">
-            <button className={cropMode==='cover'?'on':''} onClick={()=>setCropMode('cover')}>3:4 Crop</button>
-            <button className={cropMode==='fit'?'on':''} onClick={()=>setCropMode('fit')}>To‘liq sig‘dirish</button>
-          </div>
-          {cropMode==='cover' && <select value={focus} onChange={e=>setFocus(e.target.value)}>
-            <option value="center">Markaz</option><option value="top">Tepa</option><option value="bottom">Past</option><option value="left">Chap</option><option value="right">O‘ng</option>
-          </select>}
         </div>
 
-        <div className="block">
-          <h3>3. Siqish rejimi</h3>
-          <div className="seg">
-            <button className={compressionMode==='fast'?'on':''} onClick={()=>setCompressionMode('fast')}>⚡ Tez siqish</button>
-            <button className={compressionMode==='quality'?'on':''} onClick={()=>setCompressionMode('quality')}>✨ Tiniq siqish</button>
+        <div className="timeline card">
+          <div className="timelineHead">
+            <strong>Timeline</strong>
+            <span>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
           </div>
-          <div className="msg">{compressionMode==='fast'?'Tezroq: 20 FPS + bicubic + yengil tiniqlashtirish + superfast encoder.':'Sifatliroq: 20 FPS + Lanczos + yengil sharpening + yaxshiroq encoder.'}</div>
+          <div className="timelineTrack" onClick={seekTimeline}>
+            <div className="trimShade left" style={{width:(duration?start/duration*100:0)+'%'}}/>
+            <div className="clipRegion" style={{
+              left:(duration?start/duration*100:0)+'%',
+              width:(duration?(end-start)/duration*100:100)+'%'
+            }}/>
+            <div className="playhead" style={{left:(duration?currentTime/duration*100:0)+'%'}}/>
+            {Array.from({length:12}).map((_,i)=><i key={i} style={{left:(i/11*100)+'%'}}/>)}
+          </div>
+          <div className="trimRow">
+            <label>Boshi <input type="number" min="0" max={end-.1} step=".1" value={start.toFixed(1)} onChange={e=>setStart(clamp(+e.target.value,0,end-.1))}/><b>{fmtTime(start)}</b></label>
+            <label>Oxiri <input type="number" min={start+.1} max={duration} step=".1" value={end.toFixed(1)} onChange={e=>setEnd(clamp(+e.target.value,start+.1,duration))}/><b>{fmtTime(end)}</b></label>
+            <div className="durationPill">Chiqish: <b>{Math.ceil(outputDuration)} sek.</b></div>
+          </div>
+        </div>
+      </section>
+
+      <aside className="inspector card">
+        <div className="inspectorHeader">
+          <div><strong>{activeTool==='auto'?'UZUM AUTO':activeTool==='crop'?'Canvas / Crop':activeTool==='trim'?'Qirqish':activeTool==='speed'?'Tezlik':activeTool==='audio'?'Ovoz':activeTool==='wm'?'Matn / Watermark':'Export'}</strong>
+          <span>Marketplace video editor</span></div>
         </div>
 
-        <div className="block">
-          <h3>4. Tezlik</h3>
+        {activeTool==='auto' && <div className="panel">
+          <div className="autoHero">
+            <span>✦</span>
+            <h3>Uzum uchun 1 bosishda</h3>
+            <p>1080×1440 · 3:4 · MP4/H.264 · 3 MB dan katta emas.</p>
+            <button onClick={applyUzumAuto}>UZUM AUTO SOZLASH</button>
+          </div>
+          <div className="checkGrid">
+            <div><small>Format</small><b>1080×1440</b></div>
+            <div><small>Hajm</small><b>≤ 3 MB</b></div>
+            <div><small>Aspect</small><b>3:4 · SAR 1:1</b></div>
+            <div><small>Codec</small><b>MP4 · H.264</b></div>
+          </div>
+          <div className={'qualityMeter '+(estimatedQuality==='Past'?'low':'')}>
+            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps video</small>
+          </div>
+        </div>}
+
+        {activeTool==='crop' && <div className="panel">
+          <h3>Canvas</h3>
           <div className="seg">
+            <button className={cropMode==='cover'?'on':''} onClick={()=>setCropMode('cover')}>Fill / Crop</button>
+            <button className={cropMode==='fit'?'on':''} onClick={()=>setCropMode('fit')}>Fit</button>
+          </div>
+          {cropMode==='cover' && <>
+            <p className="panelHint">Preview ichidagi videoni torting yoki tayyor fokusdan tanlang.</p>
+            <div className="focusGrid">
+              <button onClick={()=>setFocusPreset(50,0)}>↑</button>
+              <button onClick={()=>setFocusPreset(50,50)}>●</button>
+              <button onClick={()=>setFocusPreset(50,100)}>↓</button>
+              <button onClick={()=>setFocusPreset(0,50)}>←</button>
+              <button onClick={()=>setFocusPreset(100,50)}>→</button>
+            </div>
+            <label className="sliderLabel">Gorizontal <input type="range" min="0" max="100" value={focusX} onChange={e=>setFocusX(+e.target.value)}/><b>{focusX}%</b></label>
+            <label className="sliderLabel">Vertikal <input type="range" min="0" max="100" value={focusY} onChange={e=>setFocusY(+e.target.value)}/><b>{focusY}%</b></label>
+          </>}
+        </div>}
+
+        {activeTool==='trim' && <div className="panel">
+          <h3>Qirqish</h3>
+          <label className="sliderLabel">Boshlanish <input type="range" min="0" max={Math.max(0,end-.1)} step=".1" value={start} onChange={e=>setStart(Math.min(+e.target.value,end-.1))}/><b>{fmtTime(start)}</b></label>
+          <label className="sliderLabel">Tugash <input type="range" min={Math.min(duration,start+.1)} max={duration} step=".1" value={end} onChange={e=>setEnd(Math.max(+e.target.value,start+.1))}/><b>{fmtTime(end)}</b></label>
+        </div>}
+
+        {activeTool==='speed' && <div className="panel">
+          <h3>Video tezligi</h3>
+          <div className="speedGrid">
             {[1,1.25,1.5,1.75,2,2.5,3].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
           </div>
-          <div className="msg">
-            Chiqish: {Math.ceil(outputDuration)} sek. · Tavsiya: <b>{recommendedSpeed}×</b>
-            {recommendedSpeed===3 && outputDuration>maxClearSeconds ? ' + kerak bo‘lsa qirqish' : ''}
-          </div>
-        </div>
+          <div className="recommend">Tavsiya: <b>{recommendedSpeed}×</b><span>Chiqish {Math.ceil(outputDuration)} sek.</span></div>
+        </div>}
 
-        <div className="block">
-          <h3>5. Ovoz</h3>
+        {activeTool==='audio' && <div className="panel">
+          <h3>Ovoz</h3>
           <div className="seg">
             <button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button>
             <button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button>
           </div>
-          {audio==='keep' && <label>Ovoz <input type="range" min="0" max="150" value={volume} onChange={e=>setVolume(+e.target.value)}/><b>{volume}%</b></label>}
-        </div>
+          {audio==='keep' && <label className="sliderLabel">Volume <input type="range" min="0" max="150" value={volume} onChange={e=>setVolume(+e.target.value)}/><b>{volume}%</b></label>}
+        </div>}
 
-        <div className="block">
-          <h3>6. Suv belgisi</h3>
-          <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)} />
-          <div className="row">
-            <select value={wmPos} onChange={e=>setWmPos(e.target.value)}>
-              <option value="br">Past o‘ng</option><option value="bl">Past chap</option><option value="tr">Tepa o‘ng</option><option value="tl">Tepa chap</option><option value="c">Markaz</option>
-            </select>
-            <label className="opacity">Shaffoflik <input type="range" min="15" max="100" value={opacity} onChange={e=>setOpacity(+e.target.value)}/><b>{opacity}%</b></label>
+        {activeTool==='wm' && <div className="panel">
+          <h3>Watermark / matn</h3>
+          <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)}/>
+          <select value={wmPos} onChange={e=>setWmPos(e.target.value)}>
+            <option value="br">Past o‘ng</option><option value="bl">Past chap</option><option value="tr">Tepa o‘ng</option><option value="tl">Tepa chap</option><option value="c">Markaz</option>
+          </select>
+          <label className="sliderLabel">Shaffoflik <input type="range" min="15" max="100" value={opacity} onChange={e=>setOpacity(+e.target.value)}/><b>{opacity}%</b></label>
+        </div>}
+
+        {activeTool==='export' && <div className="panel">
+          <h3>Export sozlamalari</h3>
+          <div className="presetCard selected">
+            <div><b>Uzum Market</b><span>1080×1440 · ≤3 MB · H.264</span></div><strong>✓</strong>
           </div>
-        </div>
+          <div className="seg">
+            <button className={compressionMode==='fast'?'on':''} onClick={()=>setCompressionMode('fast')}>⚡ Tez</button>
+            <button className={compressionMode==='quality'?'on':''} onClick={()=>setCompressionMode('quality')}>✨ Tiniq</button>
+          </div>
+          <div className="exportFacts">
+            <span>Resolution <b>1080×1440</b></span>
+            <span>FPS <b>20</b></span>
+            <span>Audio <b>{audio==='mute'?'Off':'32 kbps'}</b></span>
+            <span>Taxminiy sifat <b>{estimatedQuality}</b></span>
+          </div>
+        </div>}
 
-        <div className="target">
-          <div><small>FORMAT</small><b>{exportMode==='4k'?'2160×2880 · 4K':'1080×1440 · 3:4'}</b></div>
-          <div><small>{exportMode==='4k'?'SIFAT':'MAX HAJM'}</small><b>{exportMode==='4k'?'MAX · CRF 19':'3.00 MB'}</b></div>
-          <div><small>TEZLIK</small><b>{speed}×</b></div>
-          <div><small>SIQISH</small><b>{compressionMode==='fast'?'⚡ TEZ':'✨ TINIQ'}</b></div>
-          {exportMode==='3mb' && <div><small>VIDEO</small><b>20 FPS · SAR 1:1</b></div>}
-          {exportMode==='3mb' && <div><small>AUDIO</small><b>{audio==='mute'?'0':'32'} kbps</b></div>}
+        <div className="exportDock">
+          {validation && <div className={'validator '+(validation.dimensionsOK&&validation.sizeOK?'pass':'fail')}>
+            <strong>{validation.dimensionsOK&&validation.sizeOK?'✓ UZUM CHECK: TAYYOR':'! UZUM CHECK: MUAMMO'}</strong>
+            <span>{validation.width}×{validation.height} · {fmtSize(validation.size)}</span>
+            <small>{validation.dimensionsOK?'✓ 1080×1440':'✕ O‘lcham'} · {validation.sizeOK?'✓ ≤3 MB':'✕ 3 MB dan katta'} · {validation.ratioOK?'✓ 3:4':'✕ Aspect'}</small>
+          </div>}
+          {message && <div className={'msg '+status}>{message}</div>}
+          <button className="export primary" disabled={status==='processing'} onClick={exportVideo}>
+            {status==='processing'?('TAYYORLANMOQDA '+progress+'%'):'UZUM UCHUN EXPORT'}
+          </button>
+          {status==='processing' && <div className="bar"><i style={{width:progress+'%'}}/></div>}
+          {outUrl && <a className="downloadV2" href={outUrl} download="uzum-1080x1440-3mb.mp4">↓ YUKLAB OLISH · {fmtSize(outSize)}</a>}
         </div>
-        {exportMode==='3mb' && outputDuration>maxClearSeconds && <div className="msg warning">3 MB uchun tavsiya: {recommendedSpeed}×. Hozirgi chiqish: {Math.ceil(outputDuration)} sek. Eksport baribir ishlaydi.</div>}
-        {exportMode==='3mb' && Math.floor((TARGET_BYTES*8)/outputDuration/1000)-(audio==='mute'?0:AUDIO_K)-24 < GOOD_VIDEO_K && <div className="msg warning">Video uzunligi sabab sifat pasayishi mumkin. 2×–3× tezlik yoki qirqish tiniqlikni oshiradi.</div>}
-        {exportMode==='4k' && <div className="msg">4K rejim fayl hajmini cheklamaydi. Sifat maksimal, eksport 1080 rejimdan sekinroq.</div>}
-        <button className="export" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?('TAYYORLANMOQDA '+progress+'%'):(exportMode==='4k'?(compressionMode==='fast'?'4K TEZ TAYYORLASH':'4K MAX SIFATDA TAYYORLASH'):(compressionMode==='fast'?'⚡ UZUM 1080×1440 TAYYORLASH':'✨ UZUM 1080×1440 TAYYORLASH'))}</button>
-        {status==='processing' && <div className="bar"><i style={{width:`${progress}%`}}/></div>}
-        {message && <div className={`msg ${status}`}>{message}</div>}
-        {outUrl && <div className="result"><div><b>Video tayyor</b><span>{fmtSize(outSize)} · {exportMode==='4k'?'4K 2160×2880':'UZUM 1080×1440 · 3:4'} · {speed}× · {compressionMode==='fast'?'tez':'tiniq'} · {audio==='mute'?'ovozsiz':'ovozli'}</span></div><a href={outUrl} download={exportMode==='4k'?'video-4k-2160x2880.mp4':'uzum-1080x1440-3mb.mp4'}>YUKLAB OLISH</a></div>}
-      </div>
+      </aside>
     </section>
   </main>;
 }
