@@ -242,11 +242,20 @@ export default function Home(){
   async function prepareTextResources(ffmpeg){
     if(!text.trim()) return false;
     phaseRef.current='text resources';
-    if(!fontBytesRef.current){
-      fontBytesRef.current=await fetchFile('https://raw.githubusercontent.com/ffmpegwasm/testdata/master/arial.ttf');
+
+    if(!fontBytesRef.current || fontBytesRef.current.byteLength===0){
+      const res=await fetch('https://raw.githubusercontent.com/ffmpegwasm/testdata/master/arial.ttf');
+      if(!res.ok) throw new Error('Font yuklanmadi: HTTP '+res.status);
+      fontBytesRef.current=await res.arrayBuffer();
     }
-    await ffmpeg.writeFile('arial.ttf',fontBytesRef.current);
-    await ffmpeg.writeFile('watermark.txt',new TextEncoder().encode(text.trim()));
+
+    // ffmpeg.wasm writeFile transferable buffer'ni detach qilishi mumkin.
+    // Cache'dagi asl ArrayBuffer'ni hech qachon worker'ga bermaymiz — har safar clone yuboramiz.
+    const fontCopy=new Uint8Array(fontBytesRef.current.slice(0));
+    const textCopy=new TextEncoder().encode(text.trim());
+
+    await ffmpeg.writeFile('arial.ttf',fontCopy);
+    await ffmpeg.writeFile('watermark.txt',textCopy);
     return true;
   }
 
