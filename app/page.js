@@ -128,14 +128,6 @@ export default function Home(){
 
   function onCanvasDown(e){
     const r=e.currentTarget.getBoundingClientRect();
-    if(active==='text'&&text.trim()){
-      const x=clamp((e.clientX-r.left)/r.width*100,0,100);
-      const y=clamp((e.clientY-r.top)/r.height*100,0,100);
-      setTextX(x);setTextY(y);
-      textDragRef.current={x:e.clientX,y:e.clientY,tx:x,ty:y,rect:r};
-      e.currentTarget.setPointerCapture?.(e.pointerId);
-      return;
-    }
     if(active==='canvas'&&fit==='cover'){
       cropDragRef.current={x:e.clientX,y:e.clientY,fx:focusX,fy:focusY,rect:r};
       e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -143,12 +135,6 @@ export default function Home(){
   }
 
   function onCanvasMove(e){
-    if(textDragRef.current&&active==='text'){
-      const d=textDragRef.current,r=d.rect;
-      setTextX(clamp(d.tx+(e.clientX-d.x)/r.width*100,0,100));
-      setTextY(clamp(d.ty+(e.clientY-d.y)/r.height*100,0,100));
-      return;
-    }
     if(cropDragRef.current&&active==='canvas'&&fit==='cover'){
       const d=cropDragRef.current,r=d.rect;
       setFocusX(clamp(d.fx-(e.clientX-d.x)/r.width*100,0,100));
@@ -230,13 +216,13 @@ export default function Home(){
 
     if(fit==='contain'){
       return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags='+scaleFlags+
-        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+drawTextFilter()+',setsar=1,setdar=3/4';
+        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
     }
 
     const px=(focusX/100).toFixed(4);
     const py=(focusY/100).toFixed(4);
     return 'scale=1080:1440:force_original_aspect_ratio=increase:flags='+scaleFlags+
-      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+drawTextFilter()+',setsar=1,setdar=3/4';
+      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
   }
 
   async function prepareTextResources(ffmpeg){
@@ -380,7 +366,7 @@ export default function Home(){
 
       const audioK=audio==='mute'?0:AUDIO_K;
       let videoK=Math.max(MIN_VIDEO_K,Math.floor(targetBytes*8/outputDuration/1000)-audioK-20);
-      const hasText=await prepareTextResources(ffmpeg);
+      const hasText=false;
 
       let bytes=await runEncode(ffmpeg,inputName,videoK,1,hasText,audioK||AUDIO_K);
 
@@ -392,10 +378,7 @@ export default function Home(){
       }
 
       try{await ffmpeg.deleteFile(inputName)}catch{}
-      if(hasText){
-        try{await ffmpeg.deleteFile('watermark.txt')}catch{}
-        try{await ffmpeg.deleteFile('arial.ttf')}catch{}
-      }
+
 
       const blob=new Blob([bytes],{type:'video/mp4'});
       const checked=await validateBlob(blob);
@@ -424,7 +407,7 @@ export default function Home(){
 
   const tools=[
     ['auto','✦','Auto'],['media','＋','Media'],['canvas','▣','Canvas'],['trim','✂','Qirqish'],
-    ['speed','⚡','Tezlik'],['audio','♪','Ovoz'],['text','T','Matn'],['adjust','◐','Rang'],['export','⇩','Export']
+    ['speed','⚡','Tezlik'],['audio','♪','Ovoz'],['adjust','◐','Rang'],['export','⇩','Export']
   ];
 
   if(!file){
@@ -489,8 +472,6 @@ export default function Home(){
             />
             <div className="safe"><span>SAFE 1080×1440</span></div>
             {active==='canvas'&&fit==='cover'&&<div className="canvasHint">↔ Videoni tortib fokusni tanlang</div>}
-            {active==='text'&&text&&<div className="canvasHint">✥ Matn joyini sichqoncha bilan belgilang</div>}
-            {text&&<div className={'overlayText '+(active==='text'?'editing':'')} style={{left:textX+'%',top:textY+'%',opacity:textOpacity/100,fontSize:Math.max(12,textSize*.38)+'px'}}>{text}</div>}
           </div>
         </div>
 
@@ -501,7 +482,6 @@ export default function Home(){
             <div className="clip" style={{left:(duration?start/duration*100:0)+'%',width:(duration?(end-start)/duration*100:100)+'%'}}>
               <span>VIDEO</span>
             </div>
-            {text&&<div className="textTrack" style={{left:(duration?start/duration*100:0)+'%',width:(duration?(end-start)/duration*100:100)+'%'}}>T · {text}</div>}
             <div className="head" style={{left:(duration?currentTime/duration*100:0)+'%'}}/>
           </div>
           <div className="timelineFoot">
@@ -515,7 +495,7 @@ export default function Home(){
 
       <aside className="inspector">
         <div className="inspectorTitle">
-          <div><strong>{active==='auto'?'Uzum Auto':active==='media'?'Media':active==='canvas'?'Canvas':active==='trim'?'Qirqish':active==='speed'?'Tezlik':active==='audio'?'Ovoz':active==='text'?'Matn':active==='adjust'?'Rang / Tiniqlik':'Export'}</strong><span>VIDEO3MB Studio</span></div>
+          <div><strong>{active==='auto'?'Uzum Auto':active==='media'?'Media':active==='canvas'?'Canvas':active==='trim'?'Qirqish':active==='speed'?'Tezlik':active==='audio'?'Ovoz':active==='adjust'?'Rang / Tiniqlik':'Export'}</strong><span>VIDEO3MB Studio</span></div>
         </div>
 
         {active==='auto'&&<div className="panel">
@@ -558,16 +538,6 @@ export default function Home(){
           <h3>Ovoz</h3>
           <div className="seg"><button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button><button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button></div>
           {audio==='keep'&&<label>Volume <input type="range" min="0" max="150" value={volume} onChange={e=>setVolume(+e.target.value)}/><b>{volume}%</b></label>}
-        </div>}
-
-        {active==='text'&&<div className="panel">
-          <h3>Matn / Watermark</h3>
-          <input className="textInput" placeholder="Masalan: Nur Baraka" value={text} onChange={e=>setText(e.target.value)}/>
-          <p className="hint">Matnni preview ustida bosib yoki sudrab joylashtiring.</p>
-          <label>Hajmi <input type="range" min="24" max="110" value={textSize} onChange={e=>setTextSize(+e.target.value)}/><b>{textSize}px</b></label>
-          <label>Shaffoflik <input type="range" min="15" max="100" value={textOpacity} onChange={e=>setTextOpacity(+e.target.value)}/><b>{textOpacity}%</b></label>
-          <div className="coords"><span>X <b>{Math.round(textX)}%</b></span><span>Y <b>{Math.round(textY)}%</b></span><button onClick={()=>{setTextX(50);setTextY(86)}}>Reset</button></div>
-          {text&&<button className="dangerSoft" onClick={()=>setText('')}>Matnni olib tashlash</button>}
         </div>}
 
         {active==='adjust'&&<div className="panel">
