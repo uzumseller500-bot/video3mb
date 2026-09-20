@@ -52,6 +52,8 @@ export default function Home() {
   const videoRef = useRef(null);
   const dragRef = useRef(null);
   const wmDragRef = useRef(null);
+  const progressDurationRef = useRef(1);
+  const progressLastRef = useRef(0);
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
   const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
@@ -131,14 +133,18 @@ export default function Home() {
     enginePromiseRef.current=(async()=>{
       const makeFFmpeg=()=>{
         const ffmpeg=new FFmpeg();
-        ffmpeg.on('progress',({progress:p})=>{
-          const pct=Math.max(1,Math.round((p||0)*100));
-          if(pct>=98){
-            setProgress(98);
-            setMessage('MP4 fayl yakunlanmoqda...');
-          }else{
-            setProgress(Math.min(97,pct));
+        ffmpeg.on('progress',({progress:p,time})=>{
+          const expected=Math.max(0.1,progressDurationRef.current||1);
+          const byTime=Number.isFinite(time) && time>0
+            ? (time/(expected*1000000))*100
+            : 0;
+          const raw=byTime>0 ? byTime : ((p||0)*100);
+          const pct=Math.max(1,Math.min(97,Math.round(raw)));
+          if(pct>progressLastRef.current){
+            progressLastRef.current=pct;
+            setProgress(pct);
           }
+          if(pct>=96) setMessage('MP4 fayl yakunlanmoqda...');
         });
         return ffmpeg;
       };
@@ -389,6 +395,8 @@ export default function Home() {
     }
 
     args.push('-y',out);
+    progressDurationRef.current=Math.max(0.1,outputDuration);
+    progressLastRef.current=0;
     await ffmpeg.exec(args);
     const data=await ffmpeg.readFile(out);
     try{await ffmpeg.deleteFile(out);}catch{}
@@ -425,7 +433,8 @@ export default function Home() {
       if(exportMode==='3mb'){
         const maxAttempts=compressionMode==='fast'?2:3;
         for(let attempt=2; attempt<=maxAttempts && result.byteLength>MAX_BYTES; attempt++){
-          setProgress(1);
+          setProgress(8);
+          progressLastRef.current=8;
           setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/'+maxAttempts+'...');
           const ratio=activeTargetBytes/result.byteLength;
           videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*0.88));
