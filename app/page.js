@@ -104,8 +104,23 @@ export default function Home() {
     setWmX(82);
     setWmY(88);
     setStatus('idle');
-    setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
+    setMessage('Video tayyor. Dvigatel oldindan yuklanmoqda...');
     setProgress(0);
+    loadEngine(true).then(()=>{
+      setMessage(m=>m==='Video tayyor. Dvigatel oldindan yuklanmoqda...'?'Video tayyor. Eksportga tayyor.':m);
+    }).catch(()=>{
+      setMessage('Video tayyor. Dvigatel eksport bosilganda qayta yuklanadi.');
+    });
+  }
+
+  function withTimeout(promise,ms,label){
+    let timer;
+    return Promise.race([
+      promise.finally(()=>clearTimeout(timer)),
+      new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error(label+' timeout')),ms);
+      })
+    ]);
   }
 
   async function loadEngine(silent=false){
@@ -137,25 +152,26 @@ export default function Home() {
         try{
           const ffmpeg=makeFFmpeg();
           const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
-          await ffmpeg.load({
+          await withTimeout(ffmpeg.load({
             coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
             wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm'),
             workerURL: await toBlobURL(`${base}/ffmpeg-core.worker.js`,'text/javascript')
-          });
+          }),18000,'multi-core');
           engineModeRef.current='multi';
           ffmpegRef.current=ffmpeg;
           return ffmpeg;
         }catch(err){
           console.warn('Multi-thread FFmpeg ishlamadi, single-threadga o‘tiladi',err);
+          try{ffmpegRef.current?.terminate?.()}catch{}
         }
       }
 
       const ffmpeg=makeFFmpeg();
       const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-      await ffmpeg.load({
+      await withTimeout(ffmpeg.load({
         coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
         wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')
-      });
+      }),30000,'single-core');
       engineModeRef.current='single';
       ffmpegRef.current=ffmpeg;
       return ffmpeg;
@@ -383,16 +399,19 @@ export default function Home() {
     if(!file) return;
 
     setStatus('processing');
-    setProgress(1);
-    setMessage(exportMode==='4k'?(compressionMode==='fast'?'4K tez eksport tayyorlanmoqda...':'4K maksimal sifat tayyorlanmoqda...'):(compressionMode==='fast'?'⚡ Tez 3 MB siqish tayyorlanmoqda...':'✨ Tiniq 3 MB eksport tayyorlanmoqda...'));
+    setProgress(2);
+    setMessage('Dvigatel tekshirilmoqda...');
     setOutUrl('');
     setOutSize(0);
 
     try{
       const ffmpeg=await loadEngine();
+      setProgress(5);
+      setMessage('Video xotiraga yuklanmoqda...');
       const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
+      setProgress(8);
 
       const activeTargetBytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
       const totalK=Math.floor((activeTargetBytes*8)/outputDuration/1000);
@@ -439,7 +458,7 @@ export default function Home() {
     }catch(e){
       console.error(e);
       setStatus('error');
-      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun. Qisqaroq video bilan urinib ko‘ring.' : 'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.');
+      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun.' : ((e?.message||'').includes('core')?'FFmpeg dvigateli yuklanmadi. Sahifani Ctrl+F5 qilib qayta urinib ko‘ring.':'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.'));
     }
   }
 
