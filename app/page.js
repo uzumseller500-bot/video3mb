@@ -9,6 +9,7 @@ const QUALITY_TARGET = 2_850_000;
 const FAST_TARGET = 2_720_000;
 const MIN_VIDEO_K = 90;
 const AUDIO_K = 32;
+const AUTO_WATERMARK_TEXT = 'VIDEO3MB';
 
 const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 const fmtSize=(b=0)=>b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(2)+' MB';
@@ -35,12 +36,6 @@ export default function Home(){
   const [audio,setAudio]=useState('keep');
   const [volume,setVolume]=useState(100);
 
-  const [text,setText]=useState('');
-  const [textX,setTextX]=useState(50);
-  const [textY,setTextY]=useState(86);
-  const [textSize,setTextSize]=useState(48);
-  const [textOpacity,setTextOpacity]=useState(82);
-
   const [brightness,setBrightness]=useState(100);
   const [contrast,setContrast]=useState(100);
   const [saturation,setSaturation]=useState(100);
@@ -56,12 +51,10 @@ export default function Home(){
 
   const videoRef=useRef(null);
   const cropDragRef=useRef(null);
-  const textDragRef=useRef(null);
   const ffmpegRef=useRef(null);
   const enginePromiseRef=useRef(null);
   const lastLogRef=useRef('');
   const phaseRef=useRef('idle');
-  const fontBytesRef=useRef(null);
 
   const clipDuration=useMemo(()=>Math.max(.1,end-start),[start,end]);
   const outputDuration=useMemo(()=>Math.max(.1,clipDuration/speed),[clipDuration,speed]);
@@ -143,7 +136,7 @@ export default function Home(){
   }
 
   function onCanvasUp(e){
-    cropDragRef.current=null;textDragRef.current=null;
+    cropDragRef.current=null;
     try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
   }
 
@@ -225,39 +218,29 @@ export default function Home(){
       ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
   }
 
-  async function prepareTextResources(ffmpeg){
-    if(!text.trim()) return false;
-    phaseRef.current='text resources';
 
-    if(!fontBytesRef.current || fontBytesRef.current.byteLength===0){
-      const res=await fetch('https://raw.githubusercontent.com/ffmpegwasm/testdata/master/arial.ttf');
-      if(!res.ok) throw new Error('Font yuklanmadi: HTTP '+res.status);
-      fontBytesRef.current=await res.arrayBuffer();
-    }
+  async function makeAutoWatermark(ffmpeg){
+    phaseRef.current='auto watermark';
+    const canvas=document.createElement('canvas');
+    canvas.width=520;
+    canvas.height=140;
+    const x=canvas.getContext('2d',{willReadFrequently:true});
+    x.clearRect(0,0,canvas.width,canvas.height);
+    x.save();
+    x.filter='blur(10px)';
+    x.globalAlpha=0.075;
+    x.fillStyle='#ffffff';
+    x.font='900 72px Arial';
+    x.textAlign='center';
+    x.textBaseline='middle';
+    x.fillText(AUTO_WATERMARK_TEXT,canvas.width/2,canvas.height/2);
+    x.restore();
 
-    // ffmpeg.wasm writeFile transferable buffer'ni detach qilishi mumkin.
-    // Cache'dagi asl ArrayBuffer'ni hech qachon worker'ga bermaymiz — har safar clone yuboramiz.
-    const fontCopy=new Uint8Array(fontBytesRef.current.slice(0));
-    const textCopy=new TextEncoder().encode(text.trim());
-
-    await ffmpeg.writeFile('arial.ttf',fontCopy);
-    await ffmpeg.writeFile('watermark.txt',textCopy);
-    return true;
-  }
-
-  function drawTextFilter(){
-    if(!text.trim()) return '';
-    const alpha=clamp(textOpacity/100,.15,1).toFixed(2);
-    const fs=Math.max(20,Math.round(textSize));
-    const px=(clamp(textX,0,100)/100).toFixed(4);
-    const py=(clamp(textY,0,100)/100).toFixed(4);
-    return ",drawtext=fontfile=/arial.ttf:textfile=/watermark.txt"+
-      ":fontsize="+fs+
-      ":fontcolor=white@"+alpha+
-      ":borderw="+Math.max(2,Math.round(fs*.08))+
-      ":bordercolor=black@0.55"+
-      ":x=min(max(W*"+px+"-text_w/2,0),W-text_w)"+
-      ":y=min(max(H*"+py+"-text_h/2,0),H-text_h)";
+    const pixels=x.getImageData(0,0,canvas.width,canvas.height).data;
+    const copy=new Uint8Array(pixels.length);
+    copy.set(pixels);
+    await ffmpeg.writeFile('auto-watermark.rgba',copy);
+    return {w:canvas.width,h:canvas.height};
   }
 
   function audioTempo(v){
@@ -295,17 +278,35 @@ export default function Home(){
     }
   }
 
-  async function runEncode(ffmpeg,inputName,videoK,attempt,hasText,audioK){
+  async function runEncode(ffmpeg,inputName,videoK,attempt,wm,audioK){
     const out='out-'+attempt+'.mp4';
 
-    const build=(safe=false)=>{
-      const args=[
-        '-ss',start.toFixed(3),'-i',inputName,
-        '-t',outputDuration.toFixed(3),
-        '-vf',baseFilter(),
-        '-map','0:v:0',
-        ...videoCodecArgs(videoK,safe)
-      ];
+    const build=(safe=false,withVisual=true)=>{
+      const args=['-ss',start.toFixed(3),'-i',inputName];
+
+      if(withVisual){
+        args.push(
+          '-f','rawvideo',
+          '-pix_fmt','rgba',
+          '-video_size',wm.w+'x'+wm.h,
+          '-framerate','1',
+          '-i','auto-watermark.rgba'
+        );
+      }
+
+      args.push('-t',outputDuration.toFixed(3));
+
+      if(withVisual){
+        args.push(
+          '-filter_complex',
+          '[0:v]'+baseFilter()+'[base];[base][1:v]overlay=(W-w)/2:(H-h)/2:eof_action=repeat:repeatlast=1:shortest=0[v]',
+          '-map','[v]'
+        );
+      }else{
+        args.push('-vf',baseFilter(),'-map','0:v:0');
+      }
+
+      args.push(...videoCodecArgs(videoK,safe));
 
       if(audio==='mute'){
         args.push('-an');
@@ -317,19 +318,33 @@ export default function Home(){
         if(af.length) args.push('-af',af.join(','));
       }
 
-      args.push('-y',out);
+      // Watermark matni metadata ichida ham saqlanadi — video ustidagi yozuv juda xira bo‘lsa ham identifikator qoladi.
+      args.push(
+        '-metadata','comment='+AUTO_WATERMARK_TEXT,
+        '-metadata','copyright='+AUTO_WATERMARK_TEXT,
+        '-y',out
+      );
       return args;
     };
 
-    setMessage(hasText?'Matn video ustiga yozilmoqda...':'Video siqilmoqda...');
+    setMessage('Avtomatik xira watermark bilan video tayyorlanmoqda...');
     try{
-      await execChecked(ffmpeg,build(false),hasText?'drawtext encode':'encode',180000);
+      await execChecked(ffmpeg,build(false,true),'auto watermark encode',180000);
     }catch(firstErr){
       if(!ffmpegRef.current) throw firstErr;
       try{await ffmpeg.deleteFile(out)}catch{}
       setProgress(v=>Math.max(v,16));
-      setMessage('SAFE encoder bilan qayta urinilmoqda...');
-      await execChecked(ffmpeg,build(true),hasText?'drawtext safe encode':'safe encode',180000);
+      setMessage('Watermark SAFE rejimda tayyorlanmoqda...');
+      try{
+        await execChecked(ffmpeg,build(true,true),'auto watermark safe encode',180000);
+      }catch(secondErr){
+        if(!ffmpegRef.current) throw secondErr;
+        try{await ffmpeg.deleteFile(out)}catch{}
+        // Vizual watermark filter ishlamasa eksportni buzmaymiz:
+        // watermark matni MP4 metadata ichida yashirin holda avtomatik saqlanadi.
+        setMessage('Yashirin watermark rejimida video tayyorlanmoqda...');
+        await execChecked(ffmpeg,build(true,false),'hidden watermark encode',180000);
+      }
     }
 
     const bytes=await ffmpeg.readFile(out);
@@ -366,19 +381,19 @@ export default function Home(){
 
       const audioK=audio==='mute'?0:AUDIO_K;
       let videoK=Math.max(MIN_VIDEO_K,Math.floor(targetBytes*8/outputDuration/1000)-audioK-20);
-      const hasText=false;
+      const wm=await makeAutoWatermark(ffmpeg);
 
-      let bytes=await runEncode(ffmpeg,inputName,videoK,1,hasText,audioK||AUDIO_K);
+      let bytes=await runEncode(ffmpeg,inputName,videoK,1,wm,audioK||AUDIO_K);
 
       if(bytes.byteLength>MAX_BYTES){
         setProgress(18);setMessage('3 MB limitga aniq moslanmoqda...');
         const ratio=MAX_BYTES/bytes.byteLength;
         videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*.91));
-        bytes=await runEncode(ffmpeg,inputName,videoK,2,hasText,audioK||AUDIO_K);
+        bytes=await runEncode(ffmpeg,inputName,videoK,2,wm,audioK||AUDIO_K);
       }
 
       try{await ffmpeg.deleteFile(inputName)}catch{}
-
+      try{await ffmpeg.deleteFile('auto-watermark.rgba')}catch{}
 
       const blob=new Blob([bytes],{type:'video/mp4'});
       const checked=await validateBlob(blob);
@@ -427,7 +442,7 @@ export default function Home(){
           <small>MP4 · MOV · WebM · fayl brauzeringizda ishlanadi</small>
         </label>
         <div className="heroFeatures">
-          <span>✓ Login kerak emas</span><span>✓ Watermark majburiy emas</span><span>✓ Uzum Auto</span><span>✓ Real 3 MB check</span>
+          <span>✓ Login kerak emas</span><span>✓ Auto xira watermark</span><span>✓ Uzum Auto</span><span>✓ Real 3 MB check</span>
         </div>
       </section>
       <section className="featureStrip">
@@ -471,6 +486,7 @@ export default function Home(){
               onLoadedMetadata={e=>{const v=e.currentTarget,d=v.duration||0;setDuration(d);setStart(0);setEnd(d);setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);}}
             />
             <div className="safe"><span>SAFE 1080×1440</span></div>
+            <div className="autoWatermarkPreview">{AUTO_WATERMARK_TEXT}</div>
             {active==='canvas'&&fit==='cover'&&<div className="canvasHint">↔ Videoni tortib fokusni tanlang</div>}
           </div>
         </div>
@@ -553,7 +569,7 @@ export default function Home(){
           <h3>Export</h3>
           <div className="exportPreset"><div><b>UZUM SELLER</b><span>1080×1440 · MP4 · H.264</span></div><strong>✓</strong></div>
           <div className="seg"><button className={quality==='fast'?'on':''} onClick={()=>setQuality('fast')}>⚡ Tez</button><button className={quality==='quality'?'on':''} onClick={()=>setQuality('quality')}>✨ Sifat</button></div>
-          <div className="facts"><span>FPS <b>{fps}</b></span><span>Video <b>~{estimatedVideoK}k</b></span><span>Audio <b>{audio==='mute'?'Off':'32k'}</b></span><span>Limit <b>3.00 MB</b></span></div>
+          <div className="facts"><span>FPS <b>{fps}</b></span><span>Video <b>~{estimatedVideoK}k</b></span><span>Audio <b>{audio==='mute'?'Off':'32k'}</b></span><span>Limit <b>3.00 MB</b></span><span>Watermark <b>AUTO · xira</b></span></div>
         </div>}
 
         <div className="exportDock">
