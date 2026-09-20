@@ -59,6 +59,8 @@ export default function Home(){
   const textDragRef=useRef(null);
   const ffmpegRef=useRef(null);
   const enginePromiseRef=useRef(null);
+  const lastLogRef=useRef('');
+  const phaseRef=useRef('idle');
 
   const clipDuration=useMemo(()=>Math.max(.1,end-start),[start,end]);
   const outputDuration=useMemo(()=>Math.max(.1,clipDuration/speed),[clipDuration,speed]);
@@ -174,20 +176,42 @@ export default function Home(){
 
     enginePromiseRef.current=(async()=>{
       setProgress(4);setMessage('Video dvigateli yuklanmoqda...');
-      const ffmpeg=new FFmpeg();
-      ffmpeg.on('progress',({progress:p})=>{
-        const pct=12+Math.round(clamp(p||0,0,1)*75);
-        setProgress(v=>Math.max(v,Math.min(88,pct)));
-      });
+      phaseRef.current='engine';
+      lastLogRef.current='';
 
-      const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-      await withTimeout(ffmpeg.load({
-        coreURL:await toBlobURL(base+'/ffmpeg-core.js','text/javascript'),
-        wasmURL:await toBlobURL(base+'/ffmpeg-core.wasm','application/wasm')
-      }),45000,'engine',()=>{try{ffmpeg.terminate()}catch{}});
+      const make=()=>{
+        const ffmpeg=new FFmpeg();
+        ffmpeg.on('progress',({progress:p})=>{
+          const pct=12+Math.round(clamp(p||0,0,1)*75);
+          setProgress(v=>Math.max(v,Math.min(88,pct)));
+        });
+        ffmpeg.on('log',({message:m})=>{
+          if(m) lastLogRef.current=String(m).slice(-240);
+        });
+        return ffmpeg;
+      };
 
-      ffmpegRef.current=ffmpeg;
-      return ffmpeg;
+      const sources=[
+        'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd',
+        'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd'
+      ];
+      let lastErr=null;
+
+      for(const base of sources){
+        const ffmpeg=make();
+        try{
+          await withTimeout(ffmpeg.load({
+            coreURL:await toBlobURL(base+'/ffmpeg-core.js','text/javascript'),
+            wasmURL:await toBlobURL(base+'/ffmpeg-core.wasm','application/wasm')
+          }),45000,'engine',()=>{try{ffmpeg.terminate()}catch{}});
+          ffmpegRef.current=ffmpeg;
+          return ffmpeg;
+        }catch(err){
+          lastErr=err;
+          try{ffmpeg.terminate()}catch{}
+        }
+      }
+      throw lastErr||new Error('FFmpeg engine load failed');
     })();
 
     try{return await enginePromiseRef.current;}
@@ -246,16 +270,34 @@ export default function Home(){
     return 'atempo=2,atempo='+(v/2);
   }
 
-  function videoCodecArgs(videoK){
-    const preset=quality==='quality'?'veryfast':'superfast';
-    return [
-      '-c:v','libx264','-preset',preset,'-profile:v','high','-level','4.1',
-      '-pix_fmt','yuv420p','-tag:v','avc1',
-      '-b:v',Math.max(MIN_VIDEO_K,Math.floor(videoK))+'k',
-      '-maxrate',Math.floor(Math.max(MIN_VIDEO_K,videoK)*1.03)+'k',
-      '-bufsize',Math.floor(Math.max(MIN_VIDEO_K,videoK)*1.6)+'k',
-      '-movflags','+faststart','-metadata:s:v:0','rotate=0','-map_metadata','-1'
+  function videoCodecArgs(videoK,safe=false){
+    const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
+    const preset=safe?'superfast':(quality==='quality'?'veryfast':'superfast');
+    const args=[
+      '-c:v','libx264','-preset',preset,
+      '-pix_fmt','yuv420p',
+      '-b:v',vk+'k',
+      '-maxrate',Math.floor(vk*1.03)+'k',
+      '-bufsize',Math.floor(vk*1.6)+'k',
+      '-movflags','+faststart'
     ];
+    if(!safe) args.push('-profile:v','high','-level','4.1');
+    args.push('-metadata:s:v:0','rotate=0','-map_metadata','-1');
+    return args;
+  }
+
+  async function execChecked(ffmpeg,args,label,timeoutMs){
+    phaseRef.current=label;
+    lastLogRef.current='';
+    const code=await withTimeout(
+      ffmpeg.exec(args),
+      timeoutMs,
+      label,
+      ()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;}
+    );
+    if(code!==0){
+      throw new Error(label+' exit '+code+(lastLogRef.current?' · '+lastLogRef.current:''));
+    }
   }
 
   async function runEncode(ffmpeg,inputName,videoK,attempt,hasText,audioK){
@@ -263,17 +305,25 @@ export default function Home(){
     const stage='stage-'+attempt+'.mp4';
 
     if(hasText){
-      const args=[
+      const buildStage=(safe=false)=>[
         '-ss',start.toFixed(3),'-i',inputName,
-        '-i','watermark.png',
+        '-loop','1','-i','watermark.png',
         '-t',outputDuration.toFixed(3),
-        '-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':eof_action=repeat:repeatlast=1:shortest=0[v]',
+        '-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':shortest=1[v]',
         '-map','[v]','-an',
-        ...videoCodecArgs(videoK),
+        ...videoCodecArgs(videoK,safe),
         '-y',stage
       ];
+
       setMessage('Video + matn tayyorlanmoqda...');
-      await withTimeout(ffmpeg.exec(args),180000,'watermark encode',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+      try{
+        await execChecked(ffmpeg,buildStage(false),'watermark encode',180000);
+      }catch(firstErr){
+        if(!ffmpegRef.current) throw firstErr;
+        try{await ffmpeg.deleteFile(stage)}catch{}
+        setMessage('SAFE rejimda matnli video qayta tayyorlanmoqda...');
+        await execChecked(ffmpeg,buildStage(true),'watermark safe encode',180000);
+      }
 
       if(audio==='mute'){
         const bytes=await ffmpeg.readFile(stage);
@@ -295,32 +345,46 @@ export default function Home(){
       if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
       if(af.length) mux.push('-af',af.join(','));
       mux.push('-movflags','+faststart','-map_metadata','-1','-y',out);
-      await withTimeout(ffmpeg.exec(mux),90000,'audio mux',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+      await execChecked(ffmpeg,mux,'audio mux',90000);
+
       const bytes=await ffmpeg.readFile(out);
       try{await ffmpeg.deleteFile(stage)}catch{}
       try{await ffmpeg.deleteFile(out)}catch{}
       return new Uint8Array(bytes);
     }
 
-    const args=[
-      '-ss',start.toFixed(3),'-i',inputName,
-      '-t',outputDuration.toFixed(3),
-      '-vf',baseFilter(),
-      '-map','0:v:0','-map','0:a?',
-      ...videoCodecArgs(videoK)
-    ];
+    const build=(safe=false)=>{
+      const args=[
+        '-ss',start.toFixed(3),'-i',inputName,
+        '-t',outputDuration.toFixed(3),
+        '-vf',baseFilter(),
+        '-map','0:v:0',
+        ...videoCodecArgs(videoK,safe)
+      ];
+      if(audio==='mute'){
+        args.push('-an');
+      }else{
+        args.push('-map','0:a?','-c:a','aac','-b:a',audioK+'k');
+        const af=[];
+        if(speed!==1) af.push(audioTempo(speed));
+        if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
+        if(af.length) args.push('-af',af.join(','));
+      }
+      args.push('-y',out);
+      return args;
+    };
 
-    if(audio==='mute') args.push('-an');
-    else{
-      args.push('-c:a','aac','-b:a',audioK+'k');
-      const af=[];
-      if(speed!==1) af.push(audioTempo(speed));
-      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
-      if(af.length) args.push('-af',af.join(','));
-    }
-    args.push('-y',out);
     setMessage('Video siqilmoqda...');
-    await withTimeout(ffmpeg.exec(args),180000,'encode',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+    try{
+      await execChecked(ffmpeg,build(false),'encode',180000);
+    }catch(firstErr){
+      if(!ffmpegRef.current) throw firstErr;
+      try{await ffmpeg.deleteFile(out)}catch{}
+      setProgress(v=>Math.max(v,16));
+      setMessage('SAFE encoder bilan qayta urinilmoqda...');
+      await execChecked(ffmpeg,build(true),'safe encode',180000);
+    }
+
     const bytes=await ffmpeg.readFile(out);
     try{await ffmpeg.deleteFile(out)}catch{}
     return new Uint8Array(bytes);
@@ -384,8 +448,13 @@ export default function Home(){
     }catch(e){
       console.error(e);
       setStatus('error');setProgress(0);
-      const msg=String(e?.message||'');
-      setMessage(msg.includes('timeout')?'Eksport juda uzoq davom etdi va xavfsiz to‘xtatildi. Qayta urinib ko‘ring.':'Eksportda xato. Chrome yoki Edge’da qayta urinib ko‘ring.');
+      const raw=String(e?.message||'Noma’lum xato');
+      const detail=lastLogRef.current && !raw.includes(lastLogRef.current) ? ' · '+lastLogRef.current : '';
+      if(raw.includes('timeout')){
+        setMessage('XATO ['+phaseRef.current+']: vaqt tugadi. '+raw.slice(0,150));
+      }else{
+        setMessage('XATO ['+phaseRef.current+']: '+(raw+detail).slice(0,260));
+      }
     }
   }
 
