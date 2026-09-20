@@ -6,7 +6,7 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const MAX_BYTES = 3 * 1024 * 1024;
 // 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
-const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
+const TARGET_BYTES = Math.floor(2.90 * 1024 * 1024);
 const GOOD_VIDEO_K = 900;
 const MIN_VIDEO_K = 80;
 const AUDIO_K = 32;
@@ -40,7 +40,7 @@ export default function Home() {
   const [wmSize,setWmSize] = useState(48);
   const [opacity,setOpacity] = useState(70);
   const [exportMode,setExportMode] = useState('3mb');
-  const [compressionMode,setCompressionMode] = useState('fast');
+  const [compressionMode,setCompressionMode] = useState('quality');
   const [progress,setProgress] = useState(0);
   const [status,setStatus] = useState('idle');
   const [message,setMessage] = useState('');
@@ -208,7 +208,7 @@ export default function Home() {
     setAudio('keep');
     setActiveTool('auto');
     setValidation(null);
-    setMessage('UZUM AUTO qo‘llandi: 1080×1440 · 3:4 · ≤3 MB · sifat ustuvor.');
+    setMessage('UZUM AUTO: sifat birinchi o‘rinda · 1080×1440 · 3:4 · ≤3 MB.');
   }
 
   function onCanvasPointerDown(e){
@@ -349,10 +349,10 @@ export default function Home() {
     }
 
     if(exportMode==='4k'){
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'fast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
     }else{
       const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'fast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
     }
 
     args.push(
@@ -583,7 +583,7 @@ export default function Home() {
             <div><small>Codec</small><b>MP4 · H.264</b></div>
           </div>
           <div className={'qualityMeter '+(estimatedQuality==='Past'?'low':'')}>
-            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps video</small>
+            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps · sifat ustuvor</small>
           </div>
         </div>}
 
@@ -656,6 +656,7 @@ export default function Home() {
             <span>Resolution <b>1080×1440</b></span>
             <span>FPS <b>20</b></span>
             <span>Audio <b>{audio==='mute'?'Off':'32 kbps'}</b></span>
+            <span>Rejim <b>Sifat ustuvor</b></span>
             <span>Taxminiy sifat <b>{estimatedQuality}</b></span>
           </div>
         </div>}
