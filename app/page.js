@@ -9,7 +9,6 @@ const QUALITY_TARGET = 2_850_000;
 const FAST_TARGET = 2_720_000;
 const MIN_VIDEO_K = 90;
 const AUDIO_K = 32;
-const AUTO_WATERMARK_TEXT = 'VIDEO3MB';
 
 const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
 const fmtSize=(b=0)=>b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(2)+' MB';
@@ -48,6 +47,7 @@ export default function Home(){
   const [outUrl,setOutUrl]=useState('');
   const [outSize,setOutSize]=useState(0);
   const [validation,setValidation]=useState(null);
+  const [detectedBoxes,setDetectedBoxes]=useState([]);
 
   const videoRef=useRef(null);
   const cropDragRef=useRef(null);
@@ -88,7 +88,7 @@ export default function Home(){
   function resetProject(){
     if(src) URL.revokeObjectURL(src);
     if(outUrl) URL.revokeObjectURL(outUrl);
-    setFile(null);setSrc('');setOutUrl('');setValidation(null);setStatus('idle');setProgress(0);setMessage('');
+    setFile(null);setSrc('');setOutUrl('');setValidation(null);setDetectedBoxes([]);setStatus('idle');setProgress(0);setMessage('');
   }
 
   function pick(f){
@@ -96,7 +96,7 @@ export default function Home(){
     if(!f.type.startsWith('video/')){setMessage('Video fayl tanlang.');return;}
     if(src) URL.revokeObjectURL(src);
     if(outUrl) URL.revokeObjectURL(outUrl);
-    setFile(f);setSrc(URL.createObjectURL(f));setOutUrl('');setOutSize(0);setValidation(null);
+    setFile(f);setSrc(URL.createObjectURL(f));setOutUrl('');setOutSize(0);setValidation(null);setDetectedBoxes([]);
     setCurrentTime(0);setFocusX(50);setFocusY(50);setStatus('idle');setProgress(0);
     setMessage('Video yuklandi. Tahrirlash mumkin.');
   }
@@ -198,7 +198,7 @@ export default function Home(){
     finally{enginePromiseRef.current=null;}
   }
 
-  function baseFilter(){
+  function baseFilter(boxes=[]){
     const scaleFlags=quality==='quality'?'lanczos':'bicubic';
     const bright=((brightness-100)/100).toFixed(2);
     const con=(contrast/100).toFixed(2);
@@ -209,38 +209,152 @@ export default function Home(){
 
     if(fit==='contain'){
       return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags='+scaleFlags+
-        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+blurFilters(boxes)+',setsar=1,setdar=3/4';
     }
 
     const px=(focusX/100).toFixed(4);
     const py=(focusY/100).toFixed(4);
     return 'scale=1080:1440:force_original_aspect_ratio=increase:flags='+scaleFlags+
-      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+blurFilters(boxes)+',setsar=1,setdar=3/4';
   }
 
 
-  async function makeAutoWatermark(ffmpeg){
-    phaseRef.current='auto watermark';
-    const canvas=document.createElement('canvas');
-    canvas.width=520;
-    canvas.height=140;
-    const x=canvas.getContext('2d',{willReadFrequently:true});
-    x.clearRect(0,0,canvas.width,canvas.height);
-    x.save();
-    x.filter='blur(24px)';
-    x.globalAlpha=0.018;
-    x.fillStyle='#ffffff';
-    x.font='900 82px Arial';
-    x.textAlign='center';
-    x.textBaseline='middle';
-    x.fillText(AUTO_WATERMARK_TEXT,canvas.width/2,canvas.height/2);
-    x.restore();
 
-    const pixels=x.getImageData(0,0,canvas.width,canvas.height).data;
-    const copy=new Uint8Array(pixels.length);
-    copy.set(pixels);
-    await ffmpeg.writeFile('auto-watermark.rgba',copy);
-    return {w:canvas.width,h:canvas.height};
+  function waitVideoEvent(el,event,ms=7000){
+    return new Promise((resolve,reject)=>{
+      let timer;
+      const done=()=>{clearTimeout(timer);el.removeEventListener(event,done);resolve();};
+      timer=setTimeout(()=>{el.removeEventListener(event,done);reject(new Error('video '+event+' timeout'));},ms);
+      el.addEventListener(event,done,{once:true});
+    });
+  }
+
+  function drawDetectedFrame(ctx,v,w,h){
+    ctx.fillStyle='#000';
+    ctx.fillRect(0,0,w,h);
+    const sw=v.videoWidth||1, sh=v.videoHeight||1;
+    const scale=fit==='cover'?Math.max(w/sw,h/sh):Math.min(w/sw,h/sh);
+    const dw=sw*scale, dh=sh*scale;
+    const dx=fit==='cover'?-(dw-w)*(focusX/100):(w-dw)/2;
+    const dy=fit==='cover'?-(dh-h)*(focusY/100):(h-dh)/2;
+    ctx.drawImage(v,dx,dy,dw,dh);
+  }
+
+  async function detectWatermarkBoxes(){
+    phaseRef.current='watermark detect';
+    setMessage('Suv belgisi joyi avtomatik aniqlanmoqda...');
+
+    const W=360,H=480,CELL=10;
+    const v=document.createElement('video');
+    v.src=src;v.muted=true;v.playsInline=true;v.preload='auto';
+    if(v.readyState<1) await waitVideoEvent(v,'loadedmetadata');
+
+    const canvas=document.createElement('canvas');
+    canvas.width=W;canvas.height=H;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    const accX=new Uint8Array(W*H);
+    const accY=new Uint8Array(W*H);
+    const fractions=[0.08,0.27,0.50,0.73,0.92];
+    let samples=0;
+
+    for(const f of fractions){
+      const span=Math.max(.05,end-start);
+      const t=clamp(start+span*f,.01,Math.max(.01,(v.duration||end)-.03));
+      if(Math.abs((v.currentTime||0)-t)>.015){
+        v.currentTime=t;
+        try{await waitVideoEvent(v,'seeked',7000);}catch{}
+      }
+      drawDetectedFrame(ctx,v,W,H);
+      const d=ctx.getImageData(0,0,W,H).data;
+      const gray=new Uint8Array(W*H);
+      for(let i=0,p=0;i<d.length;i+=4,p++) gray[p]=Math.round(d[i]*.299+d[i+1]*.587+d[i+2]*.114);
+
+      for(let y=1;y<H;y++){
+        const row=y*W;
+        for(let x=1;x<W;x++){
+          const p=row+x;
+          if(Math.abs(gray[p]-gray[p-1])>28) accX[p]++;
+          if(Math.abs(gray[p]-gray[p-W])>28) accY[p]++;
+        }
+      }
+      samples++;
+    }
+
+    const need=Math.max(3,Math.ceil(samples*.8));
+    const rows=Math.floor(H/CELL),cols=Math.floor(W/CELL);
+    const gx=Array.from({length:rows},()=>new Uint16Array(cols));
+    const gy=Array.from({length:rows},()=>new Uint16Array(cols));
+
+    for(let r=0;r<rows;r++){
+      for(let cc=0;cc<cols;cc++){
+        let sx=0,sy=0;
+        const y0=r*CELL,x0=cc*CELL;
+        for(let yy=0;yy<CELL;yy++){
+          let p=(y0+yy)*W+x0;
+          for(let xx=0;xx<CELL;xx++,p++){
+            if(accX[p]>=need) sx++;
+            if(accY[p]>=need) sy++;
+          }
+        }
+        gx[r][cc]=sx;gy[r][cc]=sy;
+      }
+    }
+
+    const cand=Array.from({length:rows},(_,r)=>Array.from({length:cols},(_,cc)=>gx[r][cc]>=5&&gy[r][cc]>=5));
+    const seen=Array.from({length:rows},()=>Array(cols).fill(false));
+    const comps=[];
+
+    for(let r=0;r<rows;r++){
+      for(let cc=0;cc<cols;cc++){
+        if(!cand[r][cc]||seen[r][cc]) continue;
+        const stack=[[r,cc]],pts=[];
+        seen[r][cc]=true;
+        while(stack.length){
+          const [rr,cx]=stack.pop();pts.push([rr,cx]);
+          for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
+            const nr=rr+dr,nc=cx+dc;
+            if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&cand[nr][nc]&&!seen[nr][nc]){
+              seen[nr][nc]=true;stack.push([nr,nc]);
+            }
+          }
+        }
+        const rs=pts.map(p=>p[0]),cs=pts.map(p=>p[1]);
+        const r0=Math.min(...rs),r1=Math.max(...rs),c0=Math.min(...cs),c1=Math.max(...cs);
+        const wc=c1-c0+1,hc=r1-r0+1,aspect=wc/Math.max(1,hc);
+        if(pts.length>=8&&wc>=4&&hc<=6&&aspect>=1.7){
+          comps.push({score:pts.length*aspect,c0,r0,wc,hc});
+        }
+      }
+    }
+
+    comps.sort((a,b)=>b.score-a.score);
+    const boxes=comps.slice(0,4).map(q=>{
+      const pad=10;
+      const x=Math.max(0,q.c0*CELL-pad);
+      const y=Math.max(0,q.r0*CELL-pad);
+      const w=Math.min(W-x,q.wc*CELL+pad*2);
+      const h=Math.min(H-y,q.hc*CELL+pad*2);
+      return {
+        x:Math.max(0,Math.round(x*3)),
+        y:Math.max(0,Math.round(y*3)),
+        w:Math.min(1080-Math.round(x*3),Math.round(w*3)),
+        h:Math.min(1440-Math.round(y*3),Math.round(h*3))
+      };
+    }).filter(b=>b.w>=60&&b.h>=30);
+
+    try{v.removeAttribute('src');v.load();}catch{}
+    setDetectedBoxes(boxes);
+    return boxes;
+  }
+
+  function blurFilters(boxes=[]){
+    return boxes.map(b=>{
+      const x=Math.max(0,Math.min(1078,Math.round(b.x)));
+      const y=Math.max(0,Math.min(1438,Math.round(b.y)));
+      const w=Math.max(16,Math.min(1080-x,Math.round(b.w)));
+      const h=Math.max(16,Math.min(1440-y,Math.round(b.h)));
+      return ',delogo=x='+x+':y='+y+':w='+w+':h='+h+':show=0';
+    }).join('');
   }
 
   function audioTempo(v){
@@ -278,35 +392,17 @@ export default function Home(){
     }
   }
 
-  async function runEncode(ffmpeg,inputName,videoK,attempt,wm,audioK){
+  async function runEncode(ffmpeg,inputName,videoK,attempt,boxes,audioK){
     const out='out-'+attempt+'.mp4';
 
-    const build=(safe=false,withVisual=true)=>{
-      const args=['-ss',start.toFixed(3),'-i',inputName];
-
-      if(withVisual){
-        args.push(
-          '-f','rawvideo',
-          '-pix_fmt','rgba',
-          '-video_size',wm.w+'x'+wm.h,
-          '-framerate','1',
-          '-i','auto-watermark.rgba'
-        );
-      }
-
-      args.push('-t',outputDuration.toFixed(3));
-
-      if(withVisual){
-        args.push(
-          '-filter_complex',
-          '[0:v]'+baseFilter()+'[base];[base][1:v]overlay=(W-w)/2:(H-h)/2:eof_action=repeat:repeatlast=1:shortest=0[v]',
-          '-map','[v]'
-        );
-      }else{
-        args.push('-vf',baseFilter(),'-map','0:v:0');
-      }
-
-      args.push(...videoCodecArgs(videoK,safe));
+    const build=(safe=false)=>{
+      const args=[
+        '-ss',start.toFixed(3),'-i',inputName,
+        '-t',outputDuration.toFixed(3),
+        '-vf',baseFilter(boxes),
+        '-map','0:v:0',
+        ...videoCodecArgs(videoK,safe)
+      ];
 
       if(audio==='mute'){
         args.push('-an');
@@ -317,34 +413,19 @@ export default function Home(){
         if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
         if(af.length) args.push('-af',af.join(','));
       }
-
-      // Watermark matni metadata ichida ham saqlanadi — video ustidagi yozuv juda xira bo‘lsa ham identifikator qoladi.
-      args.push(
-        '-metadata','comment='+AUTO_WATERMARK_TEXT,
-        '-metadata','copyright='+AUTO_WATERMARK_TEXT,
-        '-y',out
-      );
+      args.push('-y',out);
       return args;
     };
 
-    setMessage('Avtomatik xira watermark bilan video tayyorlanmoqda...');
+    setMessage(boxes.length?'Aniqlangan suv belgisi xiralashtirilmoqda...':'Watermark topilmadi · video tayyorlanmoqda...');
     try{
-      await execChecked(ffmpeg,build(false,true),'auto watermark encode',180000);
+      await execChecked(ffmpeg,build(false),boxes.length?'auto blur encode':'encode',180000);
     }catch(firstErr){
       if(!ffmpegRef.current) throw firstErr;
       try{await ffmpeg.deleteFile(out)}catch{}
       setProgress(v=>Math.max(v,16));
-      setMessage('Watermark SAFE rejimda tayyorlanmoqda...');
-      try{
-        await execChecked(ffmpeg,build(true,true),'auto watermark safe encode',180000);
-      }catch(secondErr){
-        if(!ffmpegRef.current) throw secondErr;
-        try{await ffmpeg.deleteFile(out)}catch{}
-        // Vizual watermark filter ishlamasa eksportni buzmaymiz:
-        // watermark matni MP4 metadata ichida yashirin holda avtomatik saqlanadi.
-        setMessage('Yashirin watermark rejimida video tayyorlanmoqda...');
-        await execChecked(ffmpeg,build(true,false),'hidden watermark encode',180000);
-      }
+      setMessage('SAFE encoder bilan qayta urinilmoqda...');
+      await execChecked(ffmpeg,build(true),boxes.length?'auto blur safe encode':'safe encode',180000);
     }
 
     const bytes=await ffmpeg.readFile(out);
@@ -379,21 +460,20 @@ export default function Home(){
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
+      const boxes=await detectWatermarkBoxes();
       const audioK=audio==='mute'?0:AUDIO_K;
       let videoK=Math.max(MIN_VIDEO_K,Math.floor(targetBytes*8/outputDuration/1000)-audioK-20);
-      const wm=await makeAutoWatermark(ffmpeg);
 
-      let bytes=await runEncode(ffmpeg,inputName,videoK,1,wm,audioK||AUDIO_K);
+      let bytes=await runEncode(ffmpeg,inputName,videoK,1,boxes,audioK||AUDIO_K);
 
       if(bytes.byteLength>MAX_BYTES){
         setProgress(18);setMessage('3 MB limitga aniq moslanmoqda...');
         const ratio=MAX_BYTES/bytes.byteLength;
         videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*.91));
-        bytes=await runEncode(ffmpeg,inputName,videoK,2,wm,audioK||AUDIO_K);
+        bytes=await runEncode(ffmpeg,inputName,videoK,2,boxes,audioK||AUDIO_K);
       }
 
       try{await ffmpeg.deleteFile(inputName)}catch{}
-      try{await ffmpeg.deleteFile('auto-watermark.rgba')}catch{}
 
       const blob=new Blob([bytes],{type:'video/mp4'});
       const checked=await validateBlob(blob);
@@ -434,7 +514,7 @@ export default function Home(){
       <section className="landingHero">
         <div className="heroEyebrow">UZUM SELLER VIDEO STUDIO</div>
         <h1>Clideo emas. <em>Seller uchun kuchliroq.</em></h1>
-        <p>Video tahrirlash, crop, qirqish, tezlik, audio, matn, rang va Uzum’ga tayyor 3 MB eksport — bitta professional workspace’da.</p>
+        <p>Video tahrirlash, crop, qirqish, tezlik, audio, rang va watermarkni avtomatik aniqlab xiralashtirish — bitta professional workspace’da.</p>
         <label className="uploadHero">
           <input type="file" accept="video/*" onChange={e=>pick(e.target.files?.[0])}/>
           <span className="uploadPlus">＋</span>
@@ -442,7 +522,7 @@ export default function Home(){
           <small>MP4 · MOV · WebM · fayl brauzeringizda ishlanadi</small>
         </label>
         <div className="heroFeatures">
-          <span>✓ Login kerak emas</span><span>✓ Auto xira watermark</span><span>✓ Uzum Auto</span><span>✓ Real 3 MB check</span>
+          <span>✓ Login kerak emas</span><span>✓ Watermark auto-detect + blur</span><span>✓ Uzum Auto</span><span>✓ Real 3 MB check</span>
         </div>
       </section>
       <section className="featureStrip">
@@ -486,7 +566,10 @@ export default function Home(){
               onLoadedMetadata={e=>{const v=e.currentTarget,d=v.duration||0;setDuration(d);setStart(0);setEnd(d);setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);}}
             />
             <div className="safe"><span>SAFE 1080×1440</span></div>
-            <div className="autoWatermarkPreview">{AUTO_WATERMARK_TEXT}</div>
+            {detectedBoxes.map((b,i)=><div key={i} className="detectedBlurPreview" style={{
+              left:(b.x/1080*100)+'%',top:(b.y/1440*100)+'%',
+              width:(b.w/1080*100)+'%',height:(b.h/1440*100)+'%'
+            }}/>) }
             {active==='canvas'&&fit==='cover'&&<div className="canvasHint">↔ Videoni tortib fokusni tanlang</div>}
           </div>
         </div>
@@ -569,7 +652,7 @@ export default function Home(){
           <h3>Export</h3>
           <div className="exportPreset"><div><b>UZUM SELLER</b><span>1080×1440 · MP4 · H.264</span></div><strong>✓</strong></div>
           <div className="seg"><button className={quality==='fast'?'on':''} onClick={()=>setQuality('fast')}>⚡ Tez</button><button className={quality==='quality'?'on':''} onClick={()=>setQuality('quality')}>✨ Sifat</button></div>
-          <div className="facts"><span>FPS <b>{fps}</b></span><span>Video <b>~{estimatedVideoK}k</b></span><span>Audio <b>{audio==='mute'?'Off':'32k'}</b></span><span>Limit <b>3.00 MB</b></span><span>Watermark <b>AUTO · xira</b></span></div>
+          <div className="facts"><span>FPS <b>{fps}</b></span><span>Video <b>~{estimatedVideoK}k</b></span><span>Audio <b>{audio==='mute'?'Off':'32k'}</b></span><span>Limit <b>3.00 MB</b></span><span>Watermark <b>AUTO-DETECT</b></span></div>
         </div>}
 
         <div className="exportDock">
