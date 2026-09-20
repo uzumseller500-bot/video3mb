@@ -35,7 +35,9 @@ export default function Home() {
   const [volume,setVolume] = useState(100);
   const [speed,setSpeed] = useState(1);
   const [watermark,setWatermark] = useState('');
-  const [wmPos,setWmPos] = useState('br');
+  const [wmX,setWmX] = useState(82);
+  const [wmY,setWmY] = useState(88);
+  const [wmSize,setWmSize] = useState(48);
   const [opacity,setOpacity] = useState(70);
   const [exportMode,setExportMode] = useState('3mb');
   const [compressionMode,setCompressionMode] = useState('fast');
@@ -49,6 +51,7 @@ export default function Home() {
   const engineModeRef = useRef('single');
   const videoRef = useRef(null);
   const dragRef = useRef(null);
+  const wmDragRef = useRef(null);
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
   const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
@@ -98,6 +101,8 @@ export default function Home() {
     setCurrentTime(0);
     setFocusX(50);
     setFocusY(50);
+    setWmX(82);
+    setWmY(88);
     setStatus('idle');
     setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
     setProgress(0);
@@ -164,11 +169,9 @@ export default function Home() {
   }
 
   function overlayPos(){
-    const p=exportMode==='4k'?64:32;
-    return {
-      tl:p+':'+p, tr:'W-w-'+p+':'+p, bl:p+':H-h-'+p,
-      br:'W-w-'+p+':H-h-'+p, c:'(W-w)/2:(H-h)/2'
-    }[wmPos] || ('W-w-'+p+':H-h-'+p);
+    const x=(clamp(wmX,0,100)/100).toFixed(4);
+    const y=(clamp(wmY,0,100)/100).toFixed(4);
+    return '(W-w)*'+x+':(H-h)*'+y;
   }
 
   function baseFilter(){
@@ -209,14 +212,34 @@ export default function Home() {
   }
 
   function onCanvasPointerDown(e){
+    const r=e.currentTarget.getBoundingClientRect();
+
+    if(activeTool==='wm' && watermark.trim()){
+      const x=clamp((e.clientX-r.left)/Math.max(1,r.width)*100,0,100);
+      const y=clamp((e.clientY-r.top)/Math.max(1,r.height)*100,0,100);
+      setWmX(x); setWmY(y);
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      wmDragRef.current={x:e.clientX,y:e.clientY,wx:x,wy:y};
+      return;
+    }
+
     if(cropMode!=='cover') return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     dragRef.current={x:e.clientX,y:e.clientY,fx:focusX,fy:focusY};
   }
 
   function onCanvasPointerMove(e){
-    if(!dragRef.current || cropMode!=='cover') return;
     const r=e.currentTarget.getBoundingClientRect();
+
+    if(wmDragRef.current && activeTool==='wm'){
+      const dx=(e.clientX-wmDragRef.current.x)/Math.max(1,r.width)*100;
+      const dy=(e.clientY-wmDragRef.current.y)/Math.max(1,r.height)*100;
+      setWmX(clamp(wmDragRef.current.wx+dx,0,100));
+      setWmY(clamp(wmDragRef.current.wy+dy,0,100));
+      return;
+    }
+
+    if(!dragRef.current || cropMode!=='cover') return;
     const dx=(e.clientX-dragRef.current.x)/Math.max(1,r.width)*100;
     const dy=(e.clientY-dragRef.current.y)/Math.max(1,r.height)*100;
     setFocusX(clamp(dragRef.current.fx-dx,0,100));
@@ -225,6 +248,7 @@ export default function Home() {
 
   function onCanvasPointerUp(e){
     dragRef.current=null;
+    wmDragRef.current=null;
     try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
   }
 
@@ -262,16 +286,16 @@ export default function Home() {
     if(!watermark.trim()) return false;
     const c=document.createElement('canvas');
     const x=c.getContext('2d');
-    const fs=exportMode==='4k'?96:48;
+    const fs=Math.max(20,Math.round(wmSize*(exportMode==='4k'?2:1)));
     x.font=`800 ${fs}px Arial`;
-    const pad=exportMode==='4k'?96:48;
-    c.width=Math.max(exportMode==='4k'?360:180,Math.ceil(x.measureText(watermark.trim()).width+pad));
-    c.height=exportMode==='4k'?176:88;
+    const pad=Math.max(32,Math.round(fs));
+    c.width=Math.max(fs*3,Math.ceil(x.measureText(watermark.trim()).width+pad));
+    c.height=Math.max(fs*1.8,Math.round(fs+pad));
     x.font=`800 ${fs}px Arial`;
     x.textAlign='center';
     x.textBaseline='middle';
     x.globalAlpha=opacity/100;
-    x.lineWidth=7;
+    x.lineWidth=Math.max(3,Math.round(fs*0.14));
     x.strokeStyle='rgba(0,0,0,.45)';
     x.strokeText(watermark.trim(),c.width/2,c.height/2);
     x.fillStyle='#fff';
@@ -474,9 +498,17 @@ export default function Home() {
                 setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);
               }}
             />
-            {cropMode==='cover' && <div className="dragHint">↔ Videoni tortib markazni tanlang</div>}
+            {activeTool==='wm' && watermark ? <div className="dragHint">✥ Suv belgisi joyini preview ustida belgilang</div> : (cropMode==='cover' && <div className="dragHint">↔ Videoni tortib markazni tanlang</div>)}
             <div className="safeFrame"><span>UZUM 1080×1440</span></div>
-            {watermark && <div className={'wm '+wmPos} style={{opacity:opacity/100}}>{watermark}</div>}
+            {watermark && <div
+              className={'wm manual '+(activeTool==='wm'?'editing':'')}
+              style={{
+                opacity:opacity/100,
+                left:wmX+'%',
+                top:wmY+'%',
+                fontSize:Math.max(12,wmSize*0.42)+'px'
+              }}
+            >{watermark}</div>}
           </div>
         </div>
 
@@ -572,10 +604,14 @@ export default function Home() {
         {activeTool==='wm' && <div className="panel">
           <h3>Watermark / matn</h3>
           <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)}/>
-          <select value={wmPos} onChange={e=>setWmPos(e.target.value)}>
-            <option value="br">Past o‘ng</option><option value="bl">Past chap</option><option value="tr">Tepa o‘ng</option><option value="tl">Tepa chap</option><option value="c">Markaz</option>
-          </select>
+          <div className="wmHelp">1. Matnni yozing. 2. Preview ustiga bosing yoki suv belgisini sudrab kerakli joyga qo‘ying.</div>
+          <label className="sliderLabel">Hajmi <input type="range" min="24" max="120" value={wmSize} onChange={e=>setWmSize(+e.target.value)}/><b>{wmSize}px</b></label>
           <label className="sliderLabel">Shaffoflik <input type="range" min="15" max="100" value={opacity} onChange={e=>setOpacity(+e.target.value)}/><b>{opacity}%</b></label>
+          <div className="wmCoords">
+            <span>X <b>{Math.round(wmX)}%</b></span>
+            <span>Y <b>{Math.round(wmY)}%</b></span>
+            <button onClick={()=>{setWmX(50);setWmY(50)}}>Markazga</button>
+          </div>
         </div>}
 
         {activeTool==='export' && <div className="panel">
