@@ -24,7 +24,13 @@ export default function Home() {
   const [start,setStart] = useState(0);
   const [end,setEnd] = useState(0);
   const [cropMode,setCropMode] = useState('cover');
-  const [focus,setFocus] = useState('center');
+  const [focusX,setFocusX] = useState(50);
+  const [focusY,setFocusY] = useState(50);
+  const [activeTool,setActiveTool] = useState('auto');
+  const [currentTime,setCurrentTime] = useState(0);
+  const [sourceW,setSourceW] = useState(0);
+  const [sourceH,setSourceH] = useState(0);
+  const [validation,setValidation] = useState(null);
   const [audio,setAudio] = useState('keep');
   const [volume,setVolume] = useState(100);
   const [speed,setSpeed] = useState(1);
@@ -41,6 +47,8 @@ export default function Home() {
   const ffmpegRef = useRef(null);
   const enginePromiseRef = useRef(null);
   const engineModeRef = useRef('single');
+  const videoRef = useRef(null);
+  const dragRef = useRef(null);
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
   const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
@@ -53,6 +61,13 @@ export default function Home() {
     const need=clipDuration/maxClearSeconds;
     return choices.find(v=>v>=need) || 3;
   },[clipDuration,maxClearSeconds]);
+  const estimatedVideoK = useMemo(()=>{
+    if(exportMode==='4k') return 0;
+    const bytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
+    const total=Math.floor((bytes*8)/outputDuration/1000);
+    return Math.max(MIN_VIDEO_K,total-(audio==='mute'?0:AUDIO_K)-16);
+  },[exportMode,compressionMode,outputDuration,audio]);
+  const estimatedQuality = estimatedVideoK>=900?'A’lo':estimatedVideoK>=550?'Yaxshi':'Past';
 
   useEffect(()=>()=> {
     if(src) URL.revokeObjectURL(src);
@@ -79,6 +94,10 @@ export default function Home() {
     setSrc(URL.createObjectURL(f));
     setOutUrl('');
     setOutSize(0);
+    setValidation(null);
+    setCurrentTime(0);
+    setFocusX(50);
+    setFocusY(50);
     setStatus('idle');
     setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
     setProgress(0);
@@ -165,15 +184,78 @@ export default function Home() {
     if(cropMode==='fit'){
       return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags='+scaleFlags+',pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black'+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
     }
-    const pos={
-      center:'(iw-'+w+')/2:(ih-'+h+')/2',
-      top:'(iw-'+w+')/2:0',
-      bottom:'(iw-'+w+')/2:ih-'+h,
-      left:'0:(ih-'+h+')/2',
-      right:'iw-'+w+':(ih-'+h+')/2'
-    }[focus] || ('(iw-'+w+')/2:(ih-'+h+')/2');
+    const px=(Math.max(0,Math.min(100,focusX))/100).toFixed(3);
+    const py=(Math.max(0,Math.min(100,focusY))/100).toFixed(3);
+    const pos='(iw-'+w+')*'+px+':(ih-'+h+')*'+py;
 
     return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags='+scaleFlags+',crop='+w+':'+h+':'+pos+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+  }
+
+  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+
+  function setFocusPreset(x,y){
+    setFocusX(x); setFocusY(y);
+  }
+
+  function applyUzumAuto(){
+    setExportMode('3mb');
+    setCropMode('cover');
+    setCompressionMode('quality');
+    setSpeed(recommendedSpeed);
+    setAudio('keep');
+    setActiveTool('auto');
+    setValidation(null);
+    setMessage('UZUM AUTO qo‘llandi: 1080×1440 · 3:4 · ≤3 MB · sifat ustuvor.');
+  }
+
+  function onCanvasPointerDown(e){
+    if(cropMode!=='cover') return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    dragRef.current={x:e.clientX,y:e.clientY,fx:focusX,fy:focusY};
+  }
+
+  function onCanvasPointerMove(e){
+    if(!dragRef.current || cropMode!=='cover') return;
+    const r=e.currentTarget.getBoundingClientRect();
+    const dx=(e.clientX-dragRef.current.x)/Math.max(1,r.width)*100;
+    const dy=(e.clientY-dragRef.current.y)/Math.max(1,r.height)*100;
+    setFocusX(clamp(dragRef.current.fx-dx,0,100));
+    setFocusY(clamp(dragRef.current.fy-dy,0,100));
+  }
+
+  function onCanvasPointerUp(e){
+    dragRef.current=null;
+    try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
+  }
+
+  function seekTimeline(e){
+    if(!duration || !videoRef.current) return;
+    const r=e.currentTarget.getBoundingClientRect();
+    const t=clamp((e.clientX-r.left)/r.width,0,1)*duration;
+    videoRef.current.currentTime=t;
+    setCurrentTime(t);
+  }
+
+  async function validateBlob(blob){
+    return new Promise((resolve)=>{
+      const u=URL.createObjectURL(blob);
+      const v=document.createElement('video');
+      const done=(data)=>{URL.revokeObjectURL(u);resolve(data)};
+      v.preload='metadata';
+      v.onloadedmetadata=()=>done({
+        width:v.videoWidth,
+        height:v.videoHeight,
+        duration:v.duration,
+        size:blob.size,
+        sizeOK:blob.size<=MAX_BYTES,
+        dimensionsOK:v.videoWidth===1080 && v.videoHeight===1440,
+        ratioOK:Math.abs((v.videoWidth/v.videoHeight)-0.75)<0.001,
+        formatOK:true,
+        codecOK:true
+      });
+      v.onerror=()=>done({width:0,height:0,duration:0,size:blob.size,sizeOK:blob.size<=MAX_BYTES,dimensionsOK:false,ratioOK:false,formatOK:true,codecOK:true});
+      v.src=u;
+    });
   }
 
   async function makeWatermark(ffmpeg){
@@ -288,6 +370,8 @@ export default function Home() {
       if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
 
       const blob=new Blob([result],{type:'video/mp4'});
+      const checked=await validateBlob(blob);
+      setValidation(checked);
       const u=URL.createObjectURL(blob);
       setOutUrl(u);
       setOutSize(blob.size);
