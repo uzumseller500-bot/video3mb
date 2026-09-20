@@ -6,7 +6,7 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 const MAX_BYTES = 3 * 1024 * 1024;
 // 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
-const TARGET_BYTES = Math.floor(2.90 * 1024 * 1024);
+const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
 const GOOD_VIDEO_K = 900;
 const MIN_VIDEO_K = 80;
 const AUDIO_K = 32;
@@ -40,7 +40,7 @@ export default function Home() {
   const [wmSize,setWmSize] = useState(48);
   const [opacity,setOpacity] = useState(70);
   const [exportMode,setExportMode] = useState('3mb');
-  const [compressionMode,setCompressionMode] = useState('quality');
+  const [compressionMode,setCompressionMode] = useState('fast');
   const [progress,setProgress] = useState(0);
   const [status,setStatus] = useState('idle');
   const [message,setMessage] = useState('');
@@ -52,8 +52,6 @@ export default function Home() {
   const videoRef = useRef(null);
   const dragRef = useRef(null);
   const wmDragRef = useRef(null);
-  const progressDurationRef = useRef(1);
-  const progressLastRef = useRef(0);
 
   const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
   const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
@@ -106,23 +104,8 @@ export default function Home() {
     setWmX(82);
     setWmY(88);
     setStatus('idle');
-    setMessage('Video tayyor. Dvigatel oldindan yuklanmoqda...');
+    setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
     setProgress(0);
-    loadEngine(true).then(()=>{
-      setMessage(m=>m==='Video tayyor. Dvigatel oldindan yuklanmoqda...'?'Video tayyor. Eksportga tayyor.':m);
-    }).catch(()=>{
-      setMessage('Video tayyor. Dvigatel eksport bosilganda qayta yuklanadi.');
-    });
-  }
-
-  function withTimeout(promise,ms,label){
-    let timer;
-    return Promise.race([
-      promise.finally(()=>clearTimeout(timer)),
-      new Promise((_,reject)=>{
-        timer=setTimeout(()=>reject(new Error(label+' timeout')),ms);
-      })
-    ]);
   }
 
   async function loadEngine(silent=false){
@@ -133,18 +116,14 @@ export default function Home() {
     enginePromiseRef.current=(async()=>{
       const makeFFmpeg=()=>{
         const ffmpeg=new FFmpeg();
-        ffmpeg.on('progress',({progress:p,time})=>{
-          const expected=Math.max(0.1,progressDurationRef.current||1);
-          const byTime=Number.isFinite(time) && time>0
-            ? (time/(expected*1000000))*100
-            : 0;
-          const raw=byTime>0 ? byTime : ((p||0)*100);
-          const pct=Math.max(1,Math.min(97,Math.round(raw)));
-          if(pct>progressLastRef.current){
-            progressLastRef.current=pct;
-            setProgress(pct);
+        ffmpeg.on('progress',({progress:p})=>{
+          const pct=Math.max(1,Math.round((p||0)*100));
+          if(pct>=98){
+            setProgress(98);
+            setMessage('MP4 fayl yakunlanmoqda...');
+          }else{
+            setProgress(Math.min(97,pct));
           }
-          if(pct>=96) setMessage('MP4 fayl yakunlanmoqda...');
         });
         return ffmpeg;
       };
@@ -158,26 +137,25 @@ export default function Home() {
         try{
           const ffmpeg=makeFFmpeg();
           const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
-          await withTimeout(ffmpeg.load({
+          await ffmpeg.load({
             coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
             wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm'),
             workerURL: await toBlobURL(`${base}/ffmpeg-core.worker.js`,'text/javascript')
-          }),18000,'multi-core');
+          });
           engineModeRef.current='multi';
           ffmpegRef.current=ffmpeg;
           return ffmpeg;
         }catch(err){
           console.warn('Multi-thread FFmpeg ishlamadi, single-threadga o‘tiladi',err);
-          try{ffmpegRef.current?.terminate?.()}catch{}
         }
       }
 
       const ffmpeg=makeFFmpeg();
       const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-      await withTimeout(ffmpeg.load({
+      await ffmpeg.load({
         coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
         wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')
-      }),30000,'single-core');
+      });
       engineModeRef.current='single';
       ffmpegRef.current=ffmpeg;
       return ffmpeg;
@@ -230,7 +208,7 @@ export default function Home() {
     setAudio('keep');
     setActiveTool('auto');
     setValidation(null);
-    setMessage('UZUM AUTO: sifat birinchi o‘rinda · 1080×1440 · 3:4 · ≤3 MB.');
+    setMessage('UZUM AUTO qo‘llandi: 1080×1440 · 3:4 · ≤3 MB · sifat ustuvor.');
   }
 
   function onCanvasPointerDown(e){
@@ -395,8 +373,6 @@ export default function Home() {
     }
 
     args.push('-y',out);
-    progressDurationRef.current=Math.max(0.1,outputDuration);
-    progressLastRef.current=0;
     await ffmpeg.exec(args);
     const data=await ffmpeg.readFile(out);
     try{await ffmpeg.deleteFile(out);}catch{}
@@ -407,19 +383,16 @@ export default function Home() {
     if(!file) return;
 
     setStatus('processing');
-    setProgress(2);
-    setMessage('Dvigatel tekshirilmoqda...');
+    setProgress(1);
+    setMessage(exportMode==='4k'?(compressionMode==='fast'?'4K tez eksport tayyorlanmoqda...':'4K maksimal sifat tayyorlanmoqda...'):(compressionMode==='fast'?'⚡ Tez 3 MB siqish tayyorlanmoqda...':'✨ Tiniq 3 MB eksport tayyorlanmoqda...'));
     setOutUrl('');
     setOutSize(0);
 
     try{
       const ffmpeg=await loadEngine();
-      setProgress(5);
-      setMessage('Video xotiraga yuklanmoqda...');
       const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
-      setProgress(8);
 
       const activeTargetBytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
       const totalK=Math.floor((activeTargetBytes*8)/outputDuration/1000);
@@ -427,14 +400,13 @@ export default function Home() {
       let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
       const hasWM=await makeWatermark(ffmpeg);
 
-      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Tiniq siqish · ko‘p yadro...':'✨ Tiniq siqish · browser FFmpeg...')));
+      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Ko‘p yadroli tiniq siqish...':'✨ Tiniq siqish...')));
       let result=await encode(ffmpeg,inputName,videoK,1,hasWM,audioK);
 
       if(exportMode==='3mb'){
-        const maxAttempts=compressionMode==='fast'?2:3;
+        const maxAttempts=compressionMode==='fast'?2:4;
         for(let attempt=2; attempt<=maxAttempts && result.byteLength>MAX_BYTES; attempt++){
-          setProgress(8);
-          progressLastRef.current=8;
+          setProgress(1);
           setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/'+maxAttempts+'...');
           const ratio=activeTargetBytes/result.byteLength;
           videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*0.88));
@@ -467,7 +439,7 @@ export default function Home() {
     }catch(e){
       console.error(e);
       setStatus('error');
-      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun.' : ((e?.message||'').includes('core')?'FFmpeg dvigateli yuklanmadi. Sahifani Ctrl+F5 qilib qayta urinib ko‘ring.':'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.'));
+      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun. Qisqaroq video bilan urinib ko‘ring.' : 'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.');
     }
   }
 
@@ -611,7 +583,7 @@ export default function Home() {
             <div><small>Codec</small><b>MP4 · H.264</b></div>
           </div>
           <div className={'qualityMeter '+(estimatedQuality==='Past'?'low':'')}>
-            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps · sifat ustuvor</small>
+            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps video</small>
           </div>
         </div>}
 
@@ -684,7 +656,6 @@ export default function Home() {
             <span>Resolution <b>1080×1440</b></span>
             <span>FPS <b>20</b></span>
             <span>Audio <b>{audio==='mute'?'Off':'32 kbps'}</b></span>
-            <span>Rejim <b>Sifat ustuvor</b></span>
             <span>Taxminiy sifat <b>{estimatedQuality}</b></span>
           </div>
         </div>}
