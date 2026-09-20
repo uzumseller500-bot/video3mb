@@ -61,6 +61,7 @@ export default function Home(){
   const enginePromiseRef=useRef(null);
   const lastLogRef=useRef('');
   const phaseRef=useRef('idle');
+  const fontBytesRef=useRef(null);
 
   const clipDuration=useMemo(()=>Math.max(.1,end-start),[start,end]);
   const outputDuration=useMemo(()=>Math.max(.1,clipDuration/speed),[clipDuration,speed]);
@@ -229,40 +230,39 @@ export default function Home(){
 
     if(fit==='contain'){
       return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags='+scaleFlags+
-        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+drawTextFilter()+',setsar=1,setdar=3/4';
     }
 
     const px=(focusX/100).toFixed(4);
     const py=(focusY/100).toFixed(4);
     return 'scale=1080:1440:force_original_aspect_ratio=increase:flags='+scaleFlags+
-      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+drawTextFilter()+',setsar=1,setdar=3/4';
   }
 
-  async function makeTextPng(ffmpeg){
+  async function prepareTextResources(ffmpeg){
     if(!text.trim()) return false;
-    const c=document.createElement('canvas');
-    const x=c.getContext('2d');
-    const fs=Math.max(22,Math.round(textSize));
-    x.font='800 '+fs+'px Arial';
-    const pad=Math.max(28,Math.round(fs*.8));
-    c.width=Math.max(140,Math.ceil(x.measureText(text.trim()).width+pad*2));
-    c.height=Math.max(70,Math.ceil(fs+pad));
-    x.font='800 '+fs+'px Arial';
-    x.textAlign='center';x.textBaseline='middle';
-    x.globalAlpha=textOpacity/100;
-    x.lineWidth=Math.max(2,Math.round(fs*.11));
-    x.strokeStyle='rgba(0,0,0,.55)';
-    x.strokeText(text.trim(),c.width/2,c.height/2);
-    x.fillStyle='#fff';
-    x.fillText(text.trim(),c.width/2,c.height/2);
-    const blob=await new Promise(r=>c.toBlob(r,'image/png'));
-    await ffmpeg.writeFile('watermark.png',new Uint8Array(await blob.arrayBuffer()));
+    phaseRef.current='text resources';
+    if(!fontBytesRef.current){
+      fontBytesRef.current=await fetchFile('https://raw.githubusercontent.com/ffmpegwasm/testdata/master/arial.ttf');
+    }
+    await ffmpeg.writeFile('arial.ttf',fontBytesRef.current);
+    await ffmpeg.writeFile('watermark.txt',new TextEncoder().encode(text.trim()));
     return true;
   }
 
-  function overlayPos(){
-    const x=(textX/100).toFixed(4),y=(textY/100).toFixed(4);
-    return 'min(max(W*'+x+'-w/2,0),W-w):min(max(H*'+y+'-h/2,0),H-h)';
+  function drawTextFilter(){
+    if(!text.trim()) return '';
+    const alpha=clamp(textOpacity/100,.15,1).toFixed(2);
+    const fs=Math.max(20,Math.round(textSize));
+    const px=(clamp(textX,0,100)/100).toFixed(4);
+    const py=(clamp(textY,0,100)/100).toFixed(4);
+    return ",drawtext=fontfile=/arial.ttf:textfile=/watermark.txt"+
+      ":fontsize="+fs+
+      ":fontcolor=white@"+alpha+
+      ":borderw="+Math.max(2,Math.round(fs*.08))+
+      ":bordercolor=black@0.55"+
+      ":x=min(max(W*"+px+"-text_w/2,0),W-text_w)"+
+      ":y=min(max(H*"+py+"-text_h/2,0),H-text_h)";
   }
 
   function audioTempo(v){
@@ -302,56 +302,6 @@ export default function Home(){
 
   async function runEncode(ffmpeg,inputName,videoK,attempt,hasText,audioK){
     const out='out-'+attempt+'.mp4';
-    const stage='stage-'+attempt+'.mp4';
-
-    if(hasText){
-      const buildStage=(safe=false)=>[
-        '-ss',start.toFixed(3),'-i',inputName,
-        '-loop','1','-i','watermark.png',
-        '-t',outputDuration.toFixed(3),
-        '-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':shortest=1[v]',
-        '-map','[v]','-an',
-        ...videoCodecArgs(videoK,safe),
-        '-y',stage
-      ];
-
-      setMessage('Video + matn tayyorlanmoqda...');
-      try{
-        await execChecked(ffmpeg,buildStage(false),'watermark encode',180000);
-      }catch(firstErr){
-        if(!ffmpegRef.current) throw firstErr;
-        try{await ffmpeg.deleteFile(stage)}catch{}
-        setMessage('SAFE rejimda matnli video qayta tayyorlanmoqda...');
-        await execChecked(ffmpeg,buildStage(true),'watermark safe encode',180000);
-      }
-
-      if(audio==='mute'){
-        const bytes=await ffmpeg.readFile(stage);
-        try{await ffmpeg.deleteFile(stage)}catch{}
-        return new Uint8Array(bytes);
-      }
-
-      setProgress(v=>Math.max(v,90));
-      setMessage('Audio qo‘shilmoqda...');
-      const mux=[
-        '-i',stage,
-        '-ss',start.toFixed(3),'-i',inputName,
-        '-t',outputDuration.toFixed(3),
-        '-map','0:v:0','-map','1:a?',
-        '-c:v','copy','-c:a','aac','-b:a',audioK+'k'
-      ];
-      const af=[];
-      if(speed!==1) af.push(audioTempo(speed));
-      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
-      if(af.length) mux.push('-af',af.join(','));
-      mux.push('-movflags','+faststart','-map_metadata','-1','-y',out);
-      await execChecked(ffmpeg,mux,'audio mux',90000);
-
-      const bytes=await ffmpeg.readFile(out);
-      try{await ffmpeg.deleteFile(stage)}catch{}
-      try{await ffmpeg.deleteFile(out)}catch{}
-      return new Uint8Array(bytes);
-    }
 
     const build=(safe=false)=>{
       const args=[
@@ -361,6 +311,7 @@ export default function Home(){
         '-map','0:v:0',
         ...videoCodecArgs(videoK,safe)
       ];
+
       if(audio==='mute'){
         args.push('-an');
       }else{
@@ -370,19 +321,20 @@ export default function Home(){
         if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
         if(af.length) args.push('-af',af.join(','));
       }
+
       args.push('-y',out);
       return args;
     };
 
-    setMessage('Video siqilmoqda...');
+    setMessage(hasText?'Matn video ustiga yozilmoqda...':'Video siqilmoqda...');
     try{
-      await execChecked(ffmpeg,build(false),'encode',180000);
+      await execChecked(ffmpeg,build(false),hasText?'drawtext encode':'encode',180000);
     }catch(firstErr){
       if(!ffmpegRef.current) throw firstErr;
       try{await ffmpeg.deleteFile(out)}catch{}
       setProgress(v=>Math.max(v,16));
       setMessage('SAFE encoder bilan qayta urinilmoqda...');
-      await execChecked(ffmpeg,build(true),'safe encode',180000);
+      await execChecked(ffmpeg,build(true),hasText?'drawtext safe encode':'safe encode',180000);
     }
 
     const bytes=await ffmpeg.readFile(out);
@@ -419,7 +371,7 @@ export default function Home(){
 
       const audioK=audio==='mute'?0:AUDIO_K;
       let videoK=Math.max(MIN_VIDEO_K,Math.floor(targetBytes*8/outputDuration/1000)-audioK-20);
-      const hasText=await makeTextPng(ffmpeg);
+      const hasText=await prepareTextResources(ffmpeg);
 
       let bytes=await runEncode(ffmpeg,inputName,videoK,1,hasText,audioK||AUDIO_K);
 
@@ -431,7 +383,10 @@ export default function Home(){
       }
 
       try{await ffmpeg.deleteFile(inputName)}catch{}
-      if(hasText) try{await ffmpeg.deleteFile('watermark.png')}catch{}
+      if(hasText){
+        try{await ffmpeg.deleteFile('watermark.txt')}catch{}
+        try{await ffmpeg.deleteFile('arial.ttf')}catch{}
+      }
 
       const blob=new Blob([bytes],{type:'video/mp4'});
       const checked=await validateBlob(blob);
