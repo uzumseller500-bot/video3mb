@@ -252,6 +252,31 @@ export default function Home() {
     try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
   }
 
+  function onWatermarkPointerDown(e){
+    if(activeTool!=='wm') return;
+    e.stopPropagation();
+    const canvas=e.currentTarget.parentElement;
+    const r=canvas.getBoundingClientRect();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    wmDragRef.current={x:e.clientX,y:e.clientY,wx:wmX,wy:wmY,rect:r};
+  }
+
+  function onWatermarkPointerMove(e){
+    if(!wmDragRef.current || activeTool!=='wm') return;
+    e.stopPropagation();
+    const r=wmDragRef.current.rect;
+    const dx=(e.clientX-wmDragRef.current.x)/Math.max(1,r.width)*100;
+    const dy=(e.clientY-wmDragRef.current.y)/Math.max(1,r.height)*100;
+    setWmX(clamp(wmDragRef.current.wx+dx,0,100));
+    setWmY(clamp(wmDragRef.current.wy+dy,0,100));
+  }
+
+  function onWatermarkPointerUp(e){
+    e.stopPropagation();
+    wmDragRef.current=null;
+    try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
+  }
+
   function seekTimeline(e){
     if(!duration || !videoRef.current) return;
     const r=e.currentTarget.getBoundingClientRect();
@@ -508,6 +533,10 @@ export default function Home() {
                 top:wmY+'%',
                 fontSize:Math.max(12,wmSize*0.42)+'px'
               }}
+              onPointerDown={onWatermarkPointerDown}
+              onPointerMove={onWatermarkPointerMove}
+              onPointerUp={onWatermarkPointerUp}
+              onPointerCancel={onWatermarkPointerUp}
             >{watermark}</div>}
           </div>
         </div>
