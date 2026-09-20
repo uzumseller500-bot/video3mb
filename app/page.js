@@ -4,676 +4,564 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
-const MAX_BYTES = 3 * 1024 * 1024;
-// 3 MB limitga bir martada sig‘ish uchun xavfsiz zaxira qoldiramiz.
-const TARGET_BYTES = Math.floor(2.82 * 1024 * 1024);
-const GOOD_VIDEO_K = 900;
-const MIN_VIDEO_K = 80;
+const MAX_BYTES = 3_000_000;
+const QUALITY_TARGET = 2_850_000;
+const FAST_TARGET = 2_720_000;
+const MIN_VIDEO_K = 90;
 const AUDIO_K = 32;
 
-const fmtTime = (s=0) => {
-  s = Math.max(0, Math.floor(s));
-  return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+const fmtSize=(b=0)=>b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(2)+' MB';
+const fmtTime=(s=0)=>{
+  const n=Math.max(0,Math.floor(s));
+  return String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
 };
-const fmtSize = (b=0) => b < 1024*1024 ? `${Math.round(b/1024)} KB` : `${(b/1024/1024).toFixed(2)} MB`;
 
-export default function Home() {
-  const [file,setFile] = useState(null);
-  const [src,setSrc] = useState('');
-  const [duration,setDuration] = useState(0);
-  const [start,setStart] = useState(0);
-  const [end,setEnd] = useState(0);
-  const [cropMode,setCropMode] = useState('cover');
-  const [focusX,setFocusX] = useState(50);
-  const [focusY,setFocusY] = useState(50);
-  const [activeTool,setActiveTool] = useState('auto');
-  const [currentTime,setCurrentTime] = useState(0);
-  const [sourceW,setSourceW] = useState(0);
-  const [sourceH,setSourceH] = useState(0);
-  const [validation,setValidation] = useState(null);
-  const [audio,setAudio] = useState('keep');
-  const [volume,setVolume] = useState(100);
-  const [speed,setSpeed] = useState(1);
-  const [watermark,setWatermark] = useState('');
-  const [wmX,setWmX] = useState(82);
-  const [wmY,setWmY] = useState(88);
-  const [wmSize,setWmSize] = useState(48);
-  const [opacity,setOpacity] = useState(70);
-  const [exportMode,setExportMode] = useState('3mb');
-  const [compressionMode,setCompressionMode] = useState('fast');
-  const [progress,setProgress] = useState(0);
-  const [status,setStatus] = useState('idle');
-  const [message,setMessage] = useState('');
-  const [outUrl,setOutUrl] = useState('');
-  const [outSize,setOutSize] = useState(0);
-  const ffmpegRef = useRef(null);
-  const enginePromiseRef = useRef(null);
-  const engineModeRef = useRef('single');
-  const videoRef = useRef(null);
-  const dragRef = useRef(null);
-  const wmDragRef = useRef(null);
+export default function Home(){
+  const [file,setFile]=useState(null);
+  const [src,setSrc]=useState('');
+  const [duration,setDuration]=useState(0);
+  const [sourceW,setSourceW]=useState(0);
+  const [sourceH,setSourceH]=useState(0);
+  const [currentTime,setCurrentTime]=useState(0);
 
-  const clipDuration = useMemo(()=>Math.max(0.1,end-start),[start,end]);
-  const outputDuration = useMemo(()=>Math.max(0.1,clipDuration/speed),[clipDuration,speed]);
-  const maxClearSeconds = useMemo(()=>{
-    const audioK=audio==='mute'?0:AUDIO_K;
-    return Math.max(1,Math.floor((TARGET_BYTES*8/1000)/(GOOD_VIDEO_K+audioK+24)));
-  },[audio]);
-  const recommendedSpeed = useMemo(()=>{
-    const choices=[1,1.25,1.5,1.75,2,2.5,3];
-    const need=clipDuration/maxClearSeconds;
-    return choices.find(v=>v>=need) || 3;
-  },[clipDuration,maxClearSeconds]);
-  const estimatedVideoK = useMemo(()=>{
-    if(exportMode==='4k') return 0;
-    const bytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
-    const total=Math.floor((bytes*8)/outputDuration/1000);
-    return Math.max(MIN_VIDEO_K,total-(audio==='mute'?0:AUDIO_K)-16);
-  },[exportMode,compressionMode,outputDuration,audio]);
-  const estimatedQuality = estimatedVideoK>=900?'A’lo':estimatedVideoK>=550?'Yaxshi':'Past';
+  const [active,setActive]=useState('auto');
+  const [start,setStart]=useState(0);
+  const [end,setEnd]=useState(0);
+  const [fit,setFit]=useState('cover');
+  const [focusX,setFocusX]=useState(50);
+  const [focusY,setFocusY]=useState(50);
+  const [speed,setSpeed]=useState(1);
+  const [audio,setAudio]=useState('keep');
+  const [volume,setVolume]=useState(100);
 
-  useEffect(()=>()=> {
+  const [text,setText]=useState('');
+  const [textX,setTextX]=useState(50);
+  const [textY,setTextY]=useState(86);
+  const [textSize,setTextSize]=useState(48);
+  const [textOpacity,setTextOpacity]=useState(82);
+
+  const [brightness,setBrightness]=useState(100);
+  const [contrast,setContrast]=useState(100);
+  const [saturation,setSaturation]=useState(100);
+  const [sharpness,setSharpness]=useState(28);
+
+  const [quality,setQuality]=useState('quality');
+  const [status,setStatus]=useState('idle');
+  const [progress,setProgress]=useState(0);
+  const [message,setMessage]=useState('');
+  const [outUrl,setOutUrl]=useState('');
+  const [outSize,setOutSize]=useState(0);
+  const [validation,setValidation]=useState(null);
+
+  const videoRef=useRef(null);
+  const cropDragRef=useRef(null);
+  const textDragRef=useRef(null);
+  const ffmpegRef=useRef(null);
+  const enginePromiseRef=useRef(null);
+
+  const clipDuration=useMemo(()=>Math.max(.1,end-start),[start,end]);
+  const outputDuration=useMemo(()=>Math.max(.1,clipDuration/speed),[clipDuration,speed]);
+  const fps=outputDuration<=20?24:20;
+  const targetBytes=quality==='quality'?QUALITY_TARGET:FAST_TARGET;
+  const estimatedVideoK=useMemo(()=>{
+    const total=Math.floor(targetBytes*8/outputDuration/1000);
+    return Math.max(MIN_VIDEO_K,total-(audio==='mute'?0:AUDIO_K)-20);
+  },[targetBytes,outputDuration,audio]);
+  const qualityLabel=estimatedVideoK>=950?'A’lo':estimatedVideoK>=600?'Yaxshi':'Siqilgan';
+
+  useEffect(()=>()=>{ if(src) URL.revokeObjectURL(src); if(outUrl) URL.revokeObjectURL(outUrl); },[src,outUrl]);
+
+  useEffect(()=>{
+    const onKey=(e)=>{
+      if(!file) return;
+      if(e.code==='Space' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)){
+        e.preventDefault();
+        const v=videoRef.current;
+        if(v) v.paused?v.play():v.pause();
+      }
+      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){
+        e.preventDefault();
+        if(status!=='processing') exportVideo();
+      }
+    };
+    window.addEventListener('keydown',onKey);
+    return()=>window.removeEventListener('keydown',onKey);
+  });
+
+  function resetProject(){
     if(src) URL.revokeObjectURL(src);
     if(outUrl) URL.revokeObjectURL(outUrl);
-  },[src,outUrl]);
+    setFile(null);setSrc('');setOutUrl('');setValidation(null);setStatus('idle');setProgress(0);setMessage('');
+  }
 
   function pick(f){
-    if(!f){
-      setFile(null);
-      if(src) URL.revokeObjectURL(src);
-      if(outUrl) URL.revokeObjectURL(outUrl);
-      setSrc('');
-      setOutUrl('');
-      setOutSize(0);
-      setStatus('idle');
-      setMessage('');
-      setProgress(0);
-      return;
-    }
-    if(!f.type.startsWith('video/')) return setMessage('Video fayl tanlang.');
+    if(!f) return;
+    if(!f.type.startsWith('video/')){setMessage('Video fayl tanlang.');return;}
     if(src) URL.revokeObjectURL(src);
     if(outUrl) URL.revokeObjectURL(outUrl);
-    setFile(f);
-    setSrc(URL.createObjectURL(f));
-    setOutUrl('');
-    setOutSize(0);
-    setValidation(null);
-    setCurrentTime(0);
-    setFocusX(50);
-    setFocusY(50);
-    setWmX(82);
-    setWmY(88);
-    setStatus('idle');
-    setMessage('Video tayyor. Eksport sozlamalarini tanlang.');
-    setProgress(0);
-  }
-
-  async function loadEngine(silent=false){
-    if(ffmpegRef.current) return ffmpegRef.current;
-    if(enginePromiseRef.current) return enginePromiseRef.current;
-    if(!silent) setMessage('Video dvigateli yuklanmoqda...');
-
-    enginePromiseRef.current=(async()=>{
-      const makeFFmpeg=()=>{
-        const ffmpeg=new FFmpeg();
-        ffmpeg.on('progress',({progress:p})=>{
-          const pct=Math.max(1,Math.round((p||0)*100));
-          if(pct>=98){
-            setProgress(98);
-            setMessage('MP4 fayl yakunlanmoqda...');
-          }else{
-            setProgress(Math.min(97,pct));
-          }
-        });
-        return ffmpeg;
-      };
-
-      const canMulti = typeof crossOriginIsolated !== 'undefined'
-        && crossOriginIsolated
-        && typeof navigator !== 'undefined'
-        && (navigator.hardwareConcurrency || 1) >= 4;
-
-      if(canMulti){
-        try{
-          const ffmpeg=makeFFmpeg();
-          const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/umd';
-          await ffmpeg.load({
-            coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
-            wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm'),
-            workerURL: await toBlobURL(`${base}/ffmpeg-core.worker.js`,'text/javascript')
-          });
-          engineModeRef.current='multi';
-          ffmpegRef.current=ffmpeg;
-          return ffmpeg;
-        }catch(err){
-          console.warn('Multi-thread FFmpeg ishlamadi, single-threadga o‘tiladi',err);
-        }
-      }
-
-      const ffmpeg=makeFFmpeg();
-      const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${base}/ffmpeg-core.js`,'text/javascript'),
-        wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`,'application/wasm')
-      });
-      engineModeRef.current='single';
-      ffmpegRef.current=ffmpeg;
-      return ffmpeg;
-    })();
-
-    try{
-      return await enginePromiseRef.current;
-    } finally {
-      enginePromiseRef.current=null;
-    }
-  }
-
-  function overlayPos(){
-    const x=(clamp(wmX,0,100)/100).toFixed(4);
-    const y=(clamp(wmY,0,100)/100).toFixed(4);
-    return '(W-w)*'+x+':(H-h)*'+y;
-  }
-
-  function baseFilter(){
-    const is4k=exportMode==='4k';
-    const w=is4k?2160:1080;
-    const h=is4k?2880:1440;
-    const fps=is4k?30:20;
-    const fast=compressionMode==='fast';
-    const scaleFlags=fast?'bicubic':'lanczos';
-    const sharp=fast?(is4k?',unsharp=3:3:0.16:3:3:0':',unsharp=3:3:0.20:3:3:0'):(is4k?',unsharp=5:5:0.48:3:3:0.20':',unsharp=5:5:0.32:3:3:0.12');
-    const speedFilter=speed===1?'':',setpts=PTS/'+speed;
-
-    if(cropMode==='fit'){
-      return 'scale='+w+':'+h+':force_original_aspect_ratio=decrease:flags='+scaleFlags+',pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2:black'+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
-    }
-    const px=(Math.max(0,Math.min(100,focusX))/100).toFixed(3);
-    const py=(Math.max(0,Math.min(100,focusY))/100).toFixed(3);
-    const pos='(iw-'+w+')*'+px+':(ih-'+h+')*'+py;
-
-    return 'scale='+w+':'+h+':force_original_aspect_ratio=increase:flags='+scaleFlags+',crop='+w+':'+h+':'+pos+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
-  }
-
-  const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
-
-  function setFocusPreset(x,y){
-    setFocusX(x); setFocusY(y);
+    setFile(f);setSrc(URL.createObjectURL(f));setOutUrl('');setOutSize(0);setValidation(null);
+    setCurrentTime(0);setFocusX(50);setFocusY(50);setStatus('idle');setProgress(0);
+    setMessage('Video yuklandi. Tahrirlash mumkin.');
   }
 
   function applyUzumAuto(){
-    setExportMode('3mb');
-    setCropMode('cover');
-    setCompressionMode('quality');
-    setSpeed(recommendedSpeed);
-    setAudio('keep');
-    setActiveTool('auto');
+    setFit('cover');
+    setFocusX(50);setFocusY(50);
+    setQuality('quality');
+    setBrightness(100);setContrast(100);setSaturation(100);setSharpness(28);
+    setActive('auto');
     setValidation(null);
-    setMessage('UZUM AUTO qo‘llandi: 1080×1440 · 3:4 · ≤3 MB · sifat ustuvor.');
-  }
-
-  function onCanvasPointerDown(e){
-    const r=e.currentTarget.getBoundingClientRect();
-
-    if(activeTool==='wm' && watermark.trim()){
-      const x=clamp((e.clientX-r.left)/Math.max(1,r.width)*100,0,100);
-      const y=clamp((e.clientY-r.top)/Math.max(1,r.height)*100,0,100);
-      setWmX(x); setWmY(y);
-      e.currentTarget.setPointerCapture?.(e.pointerId);
-      wmDragRef.current={x:e.clientX,y:e.clientY,wx:x,wy:y};
-      return;
-    }
-
-    if(cropMode!=='cover') return;
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    dragRef.current={x:e.clientX,y:e.clientY,fx:focusX,fy:focusY};
-  }
-
-  function onCanvasPointerMove(e){
-    const r=e.currentTarget.getBoundingClientRect();
-
-    if(wmDragRef.current && activeTool==='wm'){
-      const dx=(e.clientX-wmDragRef.current.x)/Math.max(1,r.width)*100;
-      const dy=(e.clientY-wmDragRef.current.y)/Math.max(1,r.height)*100;
-      setWmX(clamp(wmDragRef.current.wx+dx,0,100));
-      setWmY(clamp(wmDragRef.current.wy+dy,0,100));
-      return;
-    }
-
-    if(!dragRef.current || cropMode!=='cover') return;
-    const dx=(e.clientX-dragRef.current.x)/Math.max(1,r.width)*100;
-    const dy=(e.clientY-dragRef.current.y)/Math.max(1,r.height)*100;
-    setFocusX(clamp(dragRef.current.fx-dx,0,100));
-    setFocusY(clamp(dragRef.current.fy-dy,0,100));
-  }
-
-  function onCanvasPointerUp(e){
-    dragRef.current=null;
-    wmDragRef.current=null;
-    try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
-  }
-
-  function onWatermarkPointerDown(e){
-    if(activeTool!=='wm') return;
-    e.stopPropagation();
-    const canvas=e.currentTarget.parentElement;
-    const r=canvas.getBoundingClientRect();
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    wmDragRef.current={x:e.clientX,y:e.clientY,wx:wmX,wy:wmY,rect:r};
-  }
-
-  function onWatermarkPointerMove(e){
-    if(!wmDragRef.current || activeTool!=='wm') return;
-    e.stopPropagation();
-    const r=wmDragRef.current.rect;
-    const dx=(e.clientX-wmDragRef.current.x)/Math.max(1,r.width)*100;
-    const dy=(e.clientY-wmDragRef.current.y)/Math.max(1,r.height)*100;
-    setWmX(clamp(wmDragRef.current.wx+dx,0,100));
-    setWmY(clamp(wmDragRef.current.wy+dy,0,100));
-  }
-
-  function onWatermarkPointerUp(e){
-    e.stopPropagation();
-    wmDragRef.current=null;
-    try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
+    setMessage('UZUM AUTO: 1080×1440 · 3:4 · 3 MB limit · sifat ustuvor.');
   }
 
   function seekTimeline(e){
-    if(!duration || !videoRef.current) return;
+    if(!duration||!videoRef.current) return;
     const r=e.currentTarget.getBoundingClientRect();
-    const t=clamp((e.clientX-r.left)/r.width,0,1)*duration;
+    const t=clamp((e.clientX-r.left)/Math.max(1,r.width),0,1)*duration;
     videoRef.current.currentTime=t;
     setCurrentTime(t);
   }
 
+  function onCanvasDown(e){
+    const r=e.currentTarget.getBoundingClientRect();
+    if(active==='text'&&text.trim()){
+      const x=clamp((e.clientX-r.left)/r.width*100,0,100);
+      const y=clamp((e.clientY-r.top)/r.height*100,0,100);
+      setTextX(x);setTextY(y);
+      textDragRef.current={x:e.clientX,y:e.clientY,tx:x,ty:y,rect:r};
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    if(active==='canvas'&&fit==='cover'){
+      cropDragRef.current={x:e.clientX,y:e.clientY,fx:focusX,fy:focusY,rect:r};
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    }
+  }
+
+  function onCanvasMove(e){
+    if(textDragRef.current&&active==='text'){
+      const d=textDragRef.current,r=d.rect;
+      setTextX(clamp(d.tx+(e.clientX-d.x)/r.width*100,0,100));
+      setTextY(clamp(d.ty+(e.clientY-d.y)/r.height*100,0,100));
+      return;
+    }
+    if(cropDragRef.current&&active==='canvas'&&fit==='cover'){
+      const d=cropDragRef.current,r=d.rect;
+      setFocusX(clamp(d.fx-(e.clientX-d.x)/r.width*100,0,100));
+      setFocusY(clamp(d.fy-(e.clientY-d.y)/r.height*100,0,100));
+    }
+  }
+
+  function onCanvasUp(e){
+    cropDragRef.current=null;textDragRef.current=null;
+    try{e.currentTarget.releasePointerCapture?.(e.pointerId)}catch{}
+  }
+
+  async function withTimeout(promise,ms,label,onTimeout){
+    let timer;
+    try{
+      return await Promise.race([
+        promise,
+        new Promise((_,reject)=>{timer=setTimeout(()=>{try{onTimeout?.()}catch{};reject(new Error(label+' timeout'));},ms);})
+      ]);
+    }finally{clearTimeout(timer);}
+  }
+
+  async function loadEngine(){
+    if(ffmpegRef.current) return ffmpegRef.current;
+    if(enginePromiseRef.current) return enginePromiseRef.current;
+
+    enginePromiseRef.current=(async()=>{
+      setProgress(4);setMessage('Video dvigateli yuklanmoqda...');
+      const ffmpeg=new FFmpeg();
+      ffmpeg.on('progress',({progress:p})=>{
+        const pct=12+Math.round(clamp(p||0,0,1)*75);
+        setProgress(v=>Math.max(v,Math.min(88,pct)));
+      });
+
+      const base='https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+      await withTimeout(ffmpeg.load({
+        coreURL:await toBlobURL(base+'/ffmpeg-core.js','text/javascript'),
+        wasmURL:await toBlobURL(base+'/ffmpeg-core.wasm','application/wasm')
+      }),45000,'engine',()=>{try{ffmpeg.terminate()}catch{}});
+
+      ffmpegRef.current=ffmpeg;
+      return ffmpeg;
+    })();
+
+    try{return await enginePromiseRef.current;}
+    finally{enginePromiseRef.current=null;}
+  }
+
+  function baseFilter(){
+    const scaleFlags=quality==='quality'?'lanczos':'bicubic';
+    const bright=((brightness-100)/100).toFixed(2);
+    const con=(contrast/100).toFixed(2);
+    const sat=(saturation/100).toFixed(2);
+    const eq=',eq=brightness='+bright+':contrast='+con+':saturation='+sat;
+    const sharp=sharpness>0?',unsharp=5:5:'+(sharpness/100*.42).toFixed(2)+':3:3:0':'';
+    const speedFilter=speed===1?'':',setpts=PTS/'+speed;
+
+    if(fit==='contain'){
+      return 'scale=1080:1440:force_original_aspect_ratio=decrease:flags='+scaleFlags+
+        ',pad=1080:1440:(ow-iw)/2:(oh-ih)/2:black'+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+    }
+
+    const px=(focusX/100).toFixed(4);
+    const py=(focusY/100).toFixed(4);
+    return 'scale=1080:1440:force_original_aspect_ratio=increase:flags='+scaleFlags+
+      ',crop=1080:1440:(iw-1080)*'+px+':(ih-1440)*'+py+eq+sharp+',fps='+fps+speedFilter+',setsar=1,setdar=3/4';
+  }
+
+  async function makeTextPng(ffmpeg){
+    if(!text.trim()) return false;
+    const c=document.createElement('canvas');
+    const x=c.getContext('2d');
+    const fs=Math.max(22,Math.round(textSize));
+    x.font='800 '+fs+'px Arial';
+    const pad=Math.max(28,Math.round(fs*.8));
+    c.width=Math.max(140,Math.ceil(x.measureText(text.trim()).width+pad*2));
+    c.height=Math.max(70,Math.ceil(fs+pad));
+    x.font='800 '+fs+'px Arial';
+    x.textAlign='center';x.textBaseline='middle';
+    x.globalAlpha=textOpacity/100;
+    x.lineWidth=Math.max(2,Math.round(fs*.11));
+    x.strokeStyle='rgba(0,0,0,.55)';
+    x.strokeText(text.trim(),c.width/2,c.height/2);
+    x.fillStyle='#fff';
+    x.fillText(text.trim(),c.width/2,c.height/2);
+    const blob=await new Promise(r=>c.toBlob(r,'image/png'));
+    await ffmpeg.writeFile('watermark.png',new Uint8Array(await blob.arrayBuffer()));
+    return true;
+  }
+
+  function overlayPos(){
+    const x=(textX/100).toFixed(4),y=(textY/100).toFixed(4);
+    return 'min(max(W*'+x+'-w/2,0),W-w):min(max(H*'+y+'-h/2,0),H-h)';
+  }
+
+  function audioTempo(v){
+    if(v<=2) return 'atempo='+v;
+    return 'atempo=2,atempo='+(v/2);
+  }
+
+  function videoCodecArgs(videoK){
+    const preset=quality==='quality'?'veryfast':'superfast';
+    return [
+      '-c:v','libx264','-preset',preset,'-profile:v','high','-level','4.1',
+      '-pix_fmt','yuv420p','-tag:v','avc1',
+      '-b:v',Math.max(MIN_VIDEO_K,Math.floor(videoK))+'k',
+      '-maxrate',Math.floor(Math.max(MIN_VIDEO_K,videoK)*1.03)+'k',
+      '-bufsize',Math.floor(Math.max(MIN_VIDEO_K,videoK)*1.6)+'k',
+      '-movflags','+faststart','-metadata:s:v:0','rotate=0','-map_metadata','-1'
+    ];
+  }
+
+  async function runEncode(ffmpeg,inputName,videoK,attempt,hasText,audioK){
+    const out='out-'+attempt+'.mp4';
+    const stage='stage-'+attempt+'.mp4';
+
+    if(hasText){
+      const args=[
+        '-ss',start.toFixed(3),'-i',inputName,
+        '-i','watermark.png',
+        '-t',outputDuration.toFixed(3),
+        '-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':eof_action=repeat:repeatlast=1:shortest=0[v]',
+        '-map','[v]','-an',
+        ...videoCodecArgs(videoK),
+        '-y',stage
+      ];
+      setMessage('Video + matn tayyorlanmoqda...');
+      await withTimeout(ffmpeg.exec(args),180000,'watermark encode',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+
+      if(audio==='mute'){
+        const bytes=await ffmpeg.readFile(stage);
+        try{await ffmpeg.deleteFile(stage)}catch{}
+        return new Uint8Array(bytes);
+      }
+
+      setProgress(v=>Math.max(v,90));
+      setMessage('Audio qo‘shilmoqda...');
+      const mux=[
+        '-i',stage,
+        '-ss',start.toFixed(3),'-i',inputName,
+        '-t',outputDuration.toFixed(3),
+        '-map','0:v:0','-map','1:a?',
+        '-c:v','copy','-c:a','aac','-b:a',audioK+'k'
+      ];
+      const af=[];
+      if(speed!==1) af.push(audioTempo(speed));
+      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
+      if(af.length) mux.push('-af',af.join(','));
+      mux.push('-movflags','+faststart','-map_metadata','-1','-y',out);
+      await withTimeout(ffmpeg.exec(mux),90000,'audio mux',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+      const bytes=await ffmpeg.readFile(out);
+      try{await ffmpeg.deleteFile(stage)}catch{}
+      try{await ffmpeg.deleteFile(out)}catch{}
+      return new Uint8Array(bytes);
+    }
+
+    const args=[
+      '-ss',start.toFixed(3),'-i',inputName,
+      '-t',outputDuration.toFixed(3),
+      '-vf',baseFilter(),
+      '-map','0:v:0','-map','0:a?',
+      ...videoCodecArgs(videoK)
+    ];
+
+    if(audio==='mute') args.push('-an');
+    else{
+      args.push('-c:a','aac','-b:a',audioK+'k');
+      const af=[];
+      if(speed!==1) af.push(audioTempo(speed));
+      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
+      if(af.length) args.push('-af',af.join(','));
+    }
+    args.push('-y',out);
+    setMessage('Video siqilmoqda...');
+    await withTimeout(ffmpeg.exec(args),180000,'encode',()=>{try{ffmpeg.terminate()}catch{};ffmpegRef.current=null;});
+    const bytes=await ffmpeg.readFile(out);
+    try{await ffmpeg.deleteFile(out)}catch{}
+    return new Uint8Array(bytes);
+  }
+
   async function validateBlob(blob){
-    return new Promise((resolve)=>{
+    return await new Promise(resolve=>{
       const u=URL.createObjectURL(blob);
       const v=document.createElement('video');
-      const done=(data)=>{URL.revokeObjectURL(u);resolve(data)};
+      const finish=(data)=>{URL.revokeObjectURL(u);resolve(data);};
       v.preload='metadata';
-      v.onloadedmetadata=()=>done({
-        width:v.videoWidth,
-        height:v.videoHeight,
-        duration:v.duration,
-        size:blob.size,
+      v.onloadedmetadata=()=>finish({
+        width:v.videoWidth,height:v.videoHeight,duration:v.duration,size:blob.size,
         sizeOK:blob.size<=MAX_BYTES,
-        dimensionsOK:v.videoWidth===1080 && v.videoHeight===1440,
-        ratioOK:Math.abs((v.videoWidth/v.videoHeight)-0.75)<0.001,
-        formatOK:true,
-        codecOK:true
+        dimensionsOK:v.videoWidth===1080&&v.videoHeight===1440,
+        ratioOK:Math.abs(v.videoWidth/v.videoHeight-.75)<.001
       });
-      v.onerror=()=>done({width:0,height:0,duration:0,size:blob.size,sizeOK:blob.size<=MAX_BYTES,dimensionsOK:false,ratioOK:false,formatOK:true,codecOK:true});
+      v.onerror=()=>finish({width:0,height:0,duration:0,size:blob.size,sizeOK:blob.size<=MAX_BYTES,dimensionsOK:false,ratioOK:false});
       v.src=u;
     });
   }
 
-  async function makeWatermark(ffmpeg){
-    if(!watermark.trim()) return false;
-    const c=document.createElement('canvas');
-    const x=c.getContext('2d');
-    const fs=Math.max(20,Math.round(wmSize*(exportMode==='4k'?2:1)));
-    x.font=`800 ${fs}px Arial`;
-    const pad=Math.max(32,Math.round(fs));
-    c.width=Math.max(fs*3,Math.ceil(x.measureText(watermark.trim()).width+pad));
-    c.height=Math.max(fs*1.8,Math.round(fs+pad));
-    x.font=`800 ${fs}px Arial`;
-    x.textAlign='center';
-    x.textBaseline='middle';
-    x.globalAlpha=opacity/100;
-    x.lineWidth=Math.max(3,Math.round(fs*0.14));
-    x.strokeStyle='rgba(0,0,0,.45)';
-    x.strokeText(watermark.trim(),c.width/2,c.height/2);
-    x.fillStyle='#fff';
-    x.fillText(watermark.trim(),c.width/2,c.height/2);
-    const blob=await new Promise(r=>c.toBlob(r,'image/png'));
-    await ffmpeg.writeFile('wm.png',new Uint8Array(await blob.arrayBuffer()));
-    return true;
-  }
-
-  function audioTempoFilter(v){
-    if(v<=2) return 'atempo='+v;
-    if(v<=4) return 'atempo=2,atempo='+(v/2);
-    return 'atempo=2,atempo=2,atempo='+(v/4);
-  }
-
-  async function encode(ffmpeg,inputName,videoK,attempt,hasWM,audioBitrateK=AUDIO_K){
-    const out='out-'+attempt+'.mp4';
-    const args=['-ss',start.toFixed(3),'-i',inputName];
-    if(hasWM) args.push('-i','wm.png');
-    args.push('-t',outputDuration.toFixed(3));
-
-    if(hasWM){
-      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[1:v]format=rgba[wm];[base][wm]overlay='+overlayPos()+':eof_action=repeat:repeatlast=1:shortest=0[v]','-map','[v]','-map','0:a?');
-    }else{
-      args.push('-vf',baseFilter());
-    }
-
-    if(exportMode==='4k'){
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
-    }else{
-      const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
-    }
-
-    args.push(
-      '-s:v',exportMode==='4k'?'2160x2880':'1080x1440',
-      '-aspect','3:4',
-      '-metadata:s:v:0','rotate=0',
-      '-map_metadata','-1'
-    );
-
-    if(audio==='mute'){
-      args.push('-an');
-    }else{
-      args.push('-c:a','aac','-b:a',(exportMode==='4k'?128:audioBitrateK)+'k');
-      const af=[];
-      if(speed!==1) af.push(audioTempoFilter(speed));
-      if(volume!==100) af.push('volume='+(volume/100).toFixed(2));
-      if(af.length) args.push('-af',af.join(','));
-    }
-
-    args.push('-y',out);
-    await ffmpeg.exec(args);
-    const data=await ffmpeg.readFile(out);
-    try{await ffmpeg.deleteFile(out);}catch{}
-    return new Uint8Array(data);
-  }
-
   async function exportVideo(){
-    if(!file) return;
-
-    setStatus('processing');
-    setProgress(1);
-    setMessage(exportMode==='4k'?(compressionMode==='fast'?'4K tez eksport tayyorlanmoqda...':'4K maksimal sifat tayyorlanmoqda...'):(compressionMode==='fast'?'⚡ Tez 3 MB siqish tayyorlanmoqda...':'✨ Tiniq 3 MB eksport tayyorlanmoqda...'));
-    setOutUrl('');
-    setOutSize(0);
-
+    if(!file||status==='processing') return;
+    setStatus('processing');setProgress(2);setValidation(null);setOutUrl('');setOutSize(0);
     try{
       const ffmpeg=await loadEngine();
+      setProgress(10);setMessage('Video xotiraga yuklanmoqda...');
       const ext=(file.name.split('.').pop()||'mp4').replace(/[^a-z0-9]/gi,'').toLowerCase();
       const inputName='input.'+(ext||'mp4');
       await ffmpeg.writeFile(inputName,await fetchFile(file));
 
-      const activeTargetBytes=compressionMode==='fast'?Math.floor(2.76*1024*1024):TARGET_BYTES;
-      const totalK=Math.floor((activeTargetBytes*8)/outputDuration/1000);
-      let audioK=audio==='mute'?0:Math.max(24,Math.min(AUDIO_K,Math.floor(totalK*0.07)));
-      let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
-      const hasWM=await makeWatermark(ffmpeg);
+      const audioK=audio==='mute'?0:AUDIO_K;
+      let videoK=Math.max(MIN_VIDEO_K,Math.floor(targetBytes*8/outputDuration/1000)-audioK-20);
+      const hasText=await makeTextPng(ffmpeg);
 
-      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Ko‘p yadroli tiniq siqish...':'✨ Tiniq siqish...')));
-      let result=await encode(ffmpeg,inputName,videoK,1,hasWM,audioK);
+      let bytes=await runEncode(ffmpeg,inputName,videoK,1,hasText,audioK||AUDIO_K);
 
-      if(exportMode==='3mb'){
-        const maxAttempts=compressionMode==='fast'?2:4;
-        for(let attempt=2; attempt<=maxAttempts && result.byteLength>MAX_BYTES; attempt++){
-          setProgress(1);
-          setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/'+maxAttempts+'...');
-          const ratio=activeTargetBytes/result.byteLength;
-          videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*0.88));
-          if(audio!=='mute') audioK=Math.max(24,Math.floor(audioK*ratio*0.94));
-          result=await encode(ffmpeg,inputName,videoK,attempt,hasWM,audioK);
-        }
+      if(bytes.byteLength>MAX_BYTES){
+        setProgress(18);setMessage('3 MB limitga aniq moslanmoqda...');
+        const ratio=MAX_BYTES/bytes.byteLength;
+        videoK=Math.max(MIN_VIDEO_K,Math.floor(videoK*ratio*.91));
+        bytes=await runEncode(ffmpeg,inputName,videoK,2,hasText,audioK||AUDIO_K);
       }
 
-      try{await ffmpeg.deleteFile(inputName);}catch{}
-      if(hasWM){try{await ffmpeg.deleteFile('wm.png');}catch{}}
+      try{await ffmpeg.deleteFile(inputName)}catch{}
+      if(hasText) try{await ffmpeg.deleteFile('watermark.png')}catch{}
 
-      const blob=new Blob([result],{type:'video/mp4'});
+      const blob=new Blob([bytes],{type:'video/mp4'});
       const checked=await validateBlob(blob);
       setValidation(checked);
       const u=URL.createObjectURL(blob);
-      setOutUrl(u);
-      setOutSize(blob.size);
-      setProgress(100);
+      setOutUrl(u);setOutSize(blob.size);setProgress(100);
 
-      if(exportMode==='4k'){
-        setStatus('done');
-        setMessage('4K MAX sifat tayyor — 2160×2880.');
-      }else if(blob.size<=MAX_BYTES){
-        setStatus('done');
-        setMessage('UZUM tayyor — aniq 1080×1440 · 3:4 · MP4/H.264 · 3 MB ichida.');
+      if(checked.sizeOK&&checked.dimensionsOK&&checked.ratioOK){
+        setStatus('done');setMessage('UZUM READY · 1080×1440 · 3:4 · 3 MB ichida.');
       }else{
         setStatus('warning');
-        setMessage('Video tayyor, lekin 3 MB limit juda qattiq bo‘lgani uchun hajm biroz oshdi. 3× yoki ovozsiz rejim yanada kichraytiradi.');
+        setMessage(checked.sizeOK?'Video tayyor, format tekshiruvida muammo bor.':'Video tayyor, lekin 3 MB dan katta.');
       }
     }catch(e){
       console.error(e);
-      setStatus('error');
-      setMessage(exportMode==='4k' ? '4K eksport uchun brauzer xotirasi yetmadi yoki video juda uzun. Qisqaroq video bilan urinib ko‘ring.' : 'Eksportda xato yuz berdi. Chrome yoki Edge’da qayta urinib ko‘ring.');
+      setStatus('error');setProgress(0);
+      const msg=String(e?.message||'');
+      setMessage(msg.includes('timeout')?'Eksport juda uzoq davom etdi va xavfsiz to‘xtatildi. Qayta urinib ko‘ring.':'Eksportda xato. Chrome yoki Edge’da qayta urinib ko‘ring.');
     }
   }
 
+  const tools=[
+    ['auto','✦','Auto'],['media','＋','Media'],['canvas','▣','Canvas'],['trim','✂','Qirqish'],
+    ['speed','⚡','Tezlik'],['audio','♪','Ovoz'],['text','T','Matn'],['adjust','◐','Rang'],['export','⇩','Export']
+  ];
+
   if(!file){
-    return <main className="shell">
-      <header><div className="logo">VIDEO<span>3MB</span></div><div className="chip">1080×1440 · 3 MB + 4K</div></header>
-      <section className="hero">
-        <div className="kicker">MARKETPLACE VIDEO TOOL</div>
-        <h1>Videoni <span>3 MB</span> gacha tayyorlang</h1>
-        <p>Qirqish, 3:4 crop, 1080×1440, watermark, ovozli/ovozsiz va avtomatik siqish — bitta joyda.</p>
+    return <main className="landing">
+      <nav className="landingNav">
+        <div className="brand">VIDEO<span>3MB</span><b>STUDIO</b></div>
+        <div className="navBadges"><span>LOCAL</span><span>1080×1440</span><span>≤3 MB</span></div>
+      </nav>
+      <section className="landingHero">
+        <div className="heroEyebrow">UZUM SELLER VIDEO STUDIO</div>
+        <h1>Clideo emas. <em>Seller uchun kuchliroq.</em></h1>
+        <p>Video tahrirlash, crop, qirqish, tezlik, audio, matn, rang va Uzum’ga tayyor 3 MB eksport — bitta professional workspace’da.</p>
+        <label className="uploadHero">
+          <input type="file" accept="video/*" onChange={e=>pick(e.target.files?.[0])}/>
+          <span className="uploadPlus">＋</span>
+          <strong>VIDEO YUKLASH</strong>
+          <small>MP4 · MOV · WebM · fayl brauzeringizda ishlanadi</small>
+        </label>
+        <div className="heroFeatures">
+          <span>✓ Login kerak emas</span><span>✓ Watermark majburiy emas</span><span>✓ Uzum Auto</span><span>✓ Real 3 MB check</span>
+        </div>
       </section>
-      <label className="drop">
-        <div className="uploadIcon">↑</div>
-        <h2>Video yuklang</h2>
-        <p>MP4, MOV yoki WebM</p>
-        <strong>VIDEO TANLASH</strong>
-        <input type="file" accept="video/*" onChange={e=>pick(e.target.files?.[0])}/>
-      </label>
-      <p className="privacy">Video brauzeringizda qayta ishlanadi.</p>
+      <section className="featureStrip">
+        <div><b>3:4</b><span>Seller canvas</span></div>
+        <div><b>1080×1440</b><span>Aniq eksport</span></div>
+        <div><b>3,000,000</b><span>Byte limiti</span></div>
+        <div><b>H.264</b><span>MP4 output</span></div>
+      </section>
     </main>;
   }
 
-  return <main className="editorShell">
-    <header className="editorTopbar">
-      <div className="logo">VIDEO<span>3MB</span><em> V2</em></div>
-      <div className="topActions">
-        <button className="ghostBtn" onClick={()=>pick(null)}>＋ Yangi video</button>
-        <button className="autoBtn" onClick={applyUzumAuto}>✦ UZUM AUTO</button>
+  return <main className="studio">
+    <header className="topbar">
+      <div className="brand small">VIDEO<span>3MB</span><b>STUDIO</b></div>
+      <div className="projectMeta">
+        <strong>{file.name}</strong>
+        <span>{sourceW||'—'}×{sourceH||'—'} · {fmtSize(file.size)} · {fmtTime(duration)}</span>
+      </div>
+      <div className="topbarActions">
+        <button className="secondary" onClick={resetProject}>＋ Yangi video</button>
+        <button className="uzumBtn" onClick={applyUzumAuto}>✦ UZUM AUTO</button>
       </div>
     </header>
 
-    <section className="editorLayout">
-      <aside className="toolRail">
-        {[
-          ['auto','✦','Auto'],
-          ['crop','▣','Crop'],
-          ['trim','✂','Qirqish'],
-          ['speed','⚡','Tezlik'],
-          ['audio','♪','Ovoz'],
-          ['wm','T','Matn'],
-          ['export','⇩','Export']
-        ].map(([id,icon,label])=>
-          <button key={id} className={activeTool===id?'active':''} onClick={()=>setActiveTool(id)}>
-            <span>{icon}</span><small>{label}</small>
-          </button>
-        )}
+    <div className="workspace">
+      <aside className="rail">
+        {tools.map(([id,icon,label])=><button key={id} onClick={()=>setActive(id)} className={active===id?'on':''}><b>{icon}</b><span>{label}</span></button>)}
       </aside>
 
-      <section className="stageColumn">
-        <div className="stageToolbar">
-          <div>
-            <strong>{file.name}</strong>
-            <span>{sourceW||'—'}×{sourceH||'—'} · {fmtSize(file.size)} · {fmtTime(duration)}</span>
-          </div>
-          <div className="stageBadges">
-            <b>3:4</b><b>1080×1440</b><b>≤3 MB</b>
-          </div>
+      <section className="center">
+        <div className="stageHeader">
+          <div className="stageTags"><span>3:4</span><span>1080×1440</span><span>≤ 3 MB</span></div>
+          <div className="stageActions"><span>{quality==='quality'?'✨ Sifat':'⚡ Tez'}</span><span>{fps} FPS</span></div>
         </div>
 
-        <div className="canvasWrap">
-          <div
-            className="videoCanvas"
-            onPointerDown={onCanvasPointerDown}
-            onPointerMove={onCanvasPointerMove}
-            onPointerUp={onCanvasPointerUp}
-            onPointerCancel={onCanvasPointerUp}
-          >
-            <video
-              ref={videoRef}
-              src={src}
-              controls
-              style={{
-                objectFit:cropMode==='cover'?'cover':'contain',
-                objectPosition:focusX+'% '+focusY+'%'
-              }}
+        <div className="stage">
+          <div className="canvas" onPointerDown={onCanvasDown} onPointerMove={onCanvasMove} onPointerUp={onCanvasUp} onPointerCancel={onCanvasUp}>
+            <video ref={videoRef} src={src} controls playsInline
+              style={{objectFit:fit==='cover'?'cover':'contain',objectPosition:focusX+'% '+focusY+'%'}}
               onTimeUpdate={e=>setCurrentTime(e.currentTarget.currentTime||0)}
-              onLoadedMetadata={e=>{
-                const v=e.currentTarget;
-                const d=v.duration||0;
-                setDuration(d);setStart(0);setEnd(d);
-                setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);
-              }}
+              onLoadedMetadata={e=>{const v=e.currentTarget,d=v.duration||0;setDuration(d);setStart(0);setEnd(d);setSourceW(v.videoWidth||0);setSourceH(v.videoHeight||0);}}
             />
-            {activeTool==='wm' && watermark ? <div className="dragHint">✥ Suv belgisi joyini preview ustida belgilang</div> : (cropMode==='cover' && <div className="dragHint">↔ Videoni tortib markazni tanlang</div>)}
-            <div className="safeFrame"><span>UZUM 1080×1440</span></div>
-            {watermark && <div
-              className={'wm manual '+(activeTool==='wm'?'editing':'')}
-              style={{
-                opacity:opacity/100,
-                left:wmX+'%',
-                top:wmY+'%',
-                fontSize:Math.max(12,wmSize*0.42)+'px'
-              }}
-              onPointerDown={onWatermarkPointerDown}
-              onPointerMove={onWatermarkPointerMove}
-              onPointerUp={onWatermarkPointerUp}
-              onPointerCancel={onWatermarkPointerUp}
-            >{watermark}</div>}
+            <div className="safe"><span>SAFE 1080×1440</span></div>
+            {active==='canvas'&&fit==='cover'&&<div className="canvasHint">↔ Videoni tortib fokusni tanlang</div>}
+            {active==='text'&&text&&<div className="canvasHint">✥ Matn joyini sichqoncha bilan belgilang</div>}
+            {text&&<div className={'overlayText '+(active==='text'?'editing':'')} style={{left:textX+'%',top:textY+'%',opacity:textOpacity/100,fontSize:Math.max(12,textSize*.38)+'px'}}>{text}</div>}
           </div>
         </div>
 
-        <div className="timeline card">
-          <div className="timelineHead">
-            <strong>Timeline</strong>
-            <span>{fmtTime(currentTime)} / {fmtTime(duration)}</span>
+        <div className="timelinePanel">
+          <div className="timelineTop"><strong>Timeline</strong><span>{fmtTime(currentTime)} / {fmtTime(duration)}</span></div>
+          <div className="timeline" onClick={seekTimeline}>
+            <div className="dim left" style={{width:(duration?start/duration*100:0)+'%'}}/>
+            <div className="clip" style={{left:(duration?start/duration*100:0)+'%',width:(duration?(end-start)/duration*100:100)+'%'}}>
+              <span>VIDEO</span>
+            </div>
+            {text&&<div className="textTrack" style={{left:(duration?start/duration*100:0)+'%',width:(duration?(end-start)/duration*100:100)+'%'}}>T · {text}</div>}
+            <div className="head" style={{left:(duration?currentTime/duration*100:0)+'%'}}/>
           </div>
-          <div className="timelineTrack" onClick={seekTimeline}>
-            <div className="trimShade left" style={{width:(duration?start/duration*100:0)+'%'}}/>
-            <div className="clipRegion" style={{
-              left:(duration?start/duration*100:0)+'%',
-              width:(duration?(end-start)/duration*100:100)+'%'
-            }}/>
-            <div className="playhead" style={{left:(duration?currentTime/duration*100:0)+'%'}}/>
-            {Array.from({length:12}).map((_,i)=><i key={i} style={{left:(i/11*100)+'%'}}/>)}
-          </div>
-          <div className="trimRow">
-            <label>Boshi <input type="number" min="0" max={end-.1} step=".1" value={start.toFixed(1)} onChange={e=>setStart(clamp(+e.target.value,0,end-.1))}/><b>{fmtTime(start)}</b></label>
-            <label>Oxiri <input type="number" min={start+.1} max={duration} step=".1" value={end.toFixed(1)} onChange={e=>setEnd(clamp(+e.target.value,start+.1,duration))}/><b>{fmtTime(end)}</b></label>
-            <div className="durationPill">Chiqish: <b>{Math.ceil(outputDuration)} sek.</b></div>
+          <div className="timelineFoot">
+            <span>Boshi <b>{start.toFixed(1)}s</b></span>
+            <span>Oxiri <b>{end.toFixed(1)}s</b></span>
+            <span>Chiqish <b>{outputDuration.toFixed(1)}s</b></span>
+            <span>Space = Play/Pause</span>
           </div>
         </div>
       </section>
 
-      <aside className="inspector card">
-        <div className="inspectorHeader">
-          <div><strong>{activeTool==='auto'?'UZUM AUTO':activeTool==='crop'?'Canvas / Crop':activeTool==='trim'?'Qirqish':activeTool==='speed'?'Tezlik':activeTool==='audio'?'Ovoz':activeTool==='wm'?'Matn / Watermark':'Export'}</strong>
-          <span>Marketplace video editor</span></div>
+      <aside className="inspector">
+        <div className="inspectorTitle">
+          <div><strong>{active==='auto'?'Uzum Auto':active==='media'?'Media':active==='canvas'?'Canvas':active==='trim'?'Qirqish':active==='speed'?'Tezlik':active==='audio'?'Ovoz':active==='text'?'Matn':active==='adjust'?'Rang / Tiniqlik':'Export'}</strong><span>VIDEO3MB Studio</span></div>
         </div>
 
-        {activeTool==='auto' && <div className="panel">
-          <div className="autoHero">
-            <span>✦</span>
-            <h3>Uzum uchun 1 bosishda</h3>
-            <p>1080×1440 · 3:4 · MP4/H.264 · 3 MB dan katta emas.</p>
-            <button onClick={applyUzumAuto}>UZUM AUTO SOZLASH</button>
-          </div>
-          <div className="checkGrid">
-            <div><small>Format</small><b>1080×1440</b></div>
-            <div><small>Hajm</small><b>≤ 3 MB</b></div>
-            <div><small>Aspect</small><b>3:4 · SAR 1:1</b></div>
-            <div><small>Codec</small><b>MP4 · H.264</b></div>
-          </div>
-          <div className={'qualityMeter '+(estimatedQuality==='Past'?'low':'')}>
-            <span>Taxminiy sifat</span><b>{estimatedQuality}</b><small>~{estimatedVideoK} kbps video</small>
-          </div>
+        {active==='auto'&&<div className="panel">
+          <div className="autoCard"><i>✦</i><h2>1 bosishda Uzum</h2><p>1080×1440 · 3:4 · H.264 · 3 MB limit.</p><button onClick={applyUzumAuto}>AUTO SOZLASH</button></div>
+          <div className="statGrid"><div><small>Format</small><b>1080×1440</b></div><div><small>Limit</small><b>3.00 MB</b></div><div><small>FPS</small><b>{fps}</b></div><div><small>Sifat</small><b>{qualityLabel}</b></div></div>
+          <div className="qualityBar"><span style={{width:Math.min(100,estimatedVideoK/12)+'%'}}/><b>~{estimatedVideoK} kbps</b></div>
         </div>}
 
-        {activeTool==='crop' && <div className="panel">
-          <h3>Canvas</h3>
-          <div className="seg">
-            <button className={cropMode==='cover'?'on':''} onClick={()=>setCropMode('cover')}>Fill / Crop</button>
-            <button className={cropMode==='fit'?'on':''} onClick={()=>setCropMode('fit')}>Fit</button>
-          </div>
-          {cropMode==='cover' && <>
-            <p className="panelHint">Preview ichidagi videoni torting yoki tayyor fokusdan tanlang.</p>
-            <div className="focusGrid">
-              <button onClick={()=>setFocusPreset(50,0)}>↑</button>
-              <button onClick={()=>setFocusPreset(50,50)}>●</button>
-              <button onClick={()=>setFocusPreset(50,100)}>↓</button>
-              <button onClick={()=>setFocusPreset(0,50)}>←</button>
-              <button onClick={()=>setFocusPreset(100,50)}>→</button>
-            </div>
-            <label className="sliderLabel">Gorizontal <input type="range" min="0" max="100" value={focusX} onChange={e=>setFocusX(+e.target.value)}/><b>{focusX}%</b></label>
-            <label className="sliderLabel">Vertikal <input type="range" min="0" max="100" value={focusY} onChange={e=>setFocusY(+e.target.value)}/><b>{focusY}%</b></label>
+        {active==='media'&&<div className="panel">
+          <h3>Media</h3>
+          <div className="mediaCard"><div className="mediaThumb">▶</div><div><b>{file.name}</b><span>{sourceW}×{sourceH} · {fmtSize(file.size)}</span></div></div>
+          <label className="replaceBtn">Video almashtirish<input type="file" accept="video/*" onChange={e=>pick(e.target.files?.[0])}/></label>
+        </div>}
+
+        {active==='canvas'&&<div className="panel">
+          <h3>Canvas 3:4</h3>
+          <div className="seg"><button className={fit==='cover'?'on':''} onClick={()=>setFit('cover')}>Fill / Crop</button><button className={fit==='contain'?'on':''} onClick={()=>setFit('contain')}>Fit</button></div>
+          {fit==='cover'&&<>
+            <p className="hint">Preview ichidagi videoni sichqoncha bilan torting.</p>
+            <label>Gorizontal <input type="range" min="0" max="100" value={focusX} onChange={e=>setFocusX(+e.target.value)}/><b>{Math.round(focusX)}%</b></label>
+            <label>Vertikal <input type="range" min="0" max="100" value={focusY} onChange={e=>setFocusY(+e.target.value)}/><b>{Math.round(focusY)}%</b></label>
+            <button className="soft" onClick={()=>{setFocusX(50);setFocusY(50)}}>Markazga qaytarish</button>
           </>}
         </div>}
 
-        {activeTool==='trim' && <div className="panel">
+        {active==='trim'&&<div className="panel">
           <h3>Qirqish</h3>
-          <label className="sliderLabel">Boshlanish <input type="range" min="0" max={Math.max(0,end-.1)} step=".1" value={start} onChange={e=>setStart(Math.min(+e.target.value,end-.1))}/><b>{fmtTime(start)}</b></label>
-          <label className="sliderLabel">Tugash <input type="range" min={Math.min(duration,start+.1)} max={duration} step=".1" value={end} onChange={e=>setEnd(Math.max(+e.target.value,start+.1))}/><b>{fmtTime(end)}</b></label>
+          <label>Boshi <input type="range" min="0" max={Math.max(0,end-.1)} step=".1" value={start} onChange={e=>setStart(Math.min(+e.target.value,end-.1))}/><b>{start.toFixed(1)}s</b></label>
+          <label>Oxiri <input type="range" min={Math.min(duration,start+.1)} max={duration} step=".1" value={end} onChange={e=>setEnd(Math.max(+e.target.value,start+.1))}/><b>{end.toFixed(1)}s</b></label>
+          <div className="bigMetric">{outputDuration.toFixed(1)} <small>sekund chiqish</small></div>
         </div>}
 
-        {activeTool==='speed' && <div className="panel">
-          <h3>Video tezligi</h3>
-          <div className="speedGrid">
-            {[1,1.25,1.5,1.75,2,2.5,3].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}
-          </div>
-          <div className="recommend">Tavsiya: <b>{recommendedSpeed}×</b><span>Chiqish {Math.ceil(outputDuration)} sek.</span></div>
+        {active==='speed'&&<div className="panel">
+          <h3>Tezlik</h3>
+          <div className="speedGrid">{[1,1.25,1.5,1.75,2,2.5,3].map(v=><button key={v} className={speed===v?'on':''} onClick={()=>setSpeed(v)}>{v}×</button>)}</div>
+          <p className="hint">Tezlik oshsa video qisqaradi va 3 MB ichida sifat uchun ko‘proq bitrate qoladi.</p>
         </div>}
 
-        {activeTool==='audio' && <div className="panel">
+        {active==='audio'&&<div className="panel">
           <h3>Ovoz</h3>
-          <div className="seg">
-            <button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button>
-            <button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button>
-          </div>
-          {audio==='keep' && <label className="sliderLabel">Volume <input type="range" min="0" max="150" value={volume} onChange={e=>setVolume(+e.target.value)}/><b>{volume}%</b></label>}
+          <div className="seg"><button className={audio==='keep'?'on':''} onClick={()=>setAudio('keep')}>🔊 Ovozli</button><button className={audio==='mute'?'on':''} onClick={()=>setAudio('mute')}>🔇 Ovozsiz</button></div>
+          {audio==='keep'&&<label>Volume <input type="range" min="0" max="150" value={volume} onChange={e=>setVolume(+e.target.value)}/><b>{volume}%</b></label>}
         </div>}
 
-        {activeTool==='wm' && <div className="panel">
-          <h3>Watermark / matn</h3>
-          <input className="text" placeholder="Masalan: Nur Baraka" value={watermark} onChange={e=>setWatermark(e.target.value)}/>
-          <div className="wmHelp">1. Matnni yozing. 2. Preview ustiga bosing yoki suv belgisini sudrab kerakli joyga qo‘ying.</div>
-          <label className="sliderLabel">Hajmi <input type="range" min="24" max="120" value={wmSize} onChange={e=>setWmSize(+e.target.value)}/><b>{wmSize}px</b></label>
-          <label className="sliderLabel">Shaffoflik <input type="range" min="15" max="100" value={opacity} onChange={e=>setOpacity(+e.target.value)}/><b>{opacity}%</b></label>
-          <div className="wmCoords">
-            <span>X <b>{Math.round(wmX)}%</b></span>
-            <span>Y <b>{Math.round(wmY)}%</b></span>
-            <button onClick={()=>{setWmX(50);setWmY(50)}}>Markazga</button>
-          </div>
+        {active==='text'&&<div className="panel">
+          <h3>Matn / Watermark</h3>
+          <input className="textInput" placeholder="Masalan: Nur Baraka" value={text} onChange={e=>setText(e.target.value)}/>
+          <p className="hint">Matnni preview ustida bosib yoki sudrab joylashtiring.</p>
+          <label>Hajmi <input type="range" min="24" max="110" value={textSize} onChange={e=>setTextSize(+e.target.value)}/><b>{textSize}px</b></label>
+          <label>Shaffoflik <input type="range" min="15" max="100" value={textOpacity} onChange={e=>setTextOpacity(+e.target.value)}/><b>{textOpacity}%</b></label>
+          <div className="coords"><span>X <b>{Math.round(textX)}%</b></span><span>Y <b>{Math.round(textY)}%</b></span><button onClick={()=>{setTextX(50);setTextY(86)}}>Reset</button></div>
+          {text&&<button className="dangerSoft" onClick={()=>setText('')}>Matnni olib tashlash</button>}
         </div>}
 
-        {activeTool==='export' && <div className="panel">
-          <h3>Export sozlamalari</h3>
-          <div className="presetCard selected">
-            <div><b>Uzum Market</b><span>1080×1440 · ≤3 MB · H.264</span></div><strong>✓</strong>
-          </div>
-          <div className="seg">
-            <button className={compressionMode==='fast'?'on':''} onClick={()=>setCompressionMode('fast')}>⚡ Tez</button>
-            <button className={compressionMode==='quality'?'on':''} onClick={()=>setCompressionMode('quality')}>✨ Tiniq</button>
-          </div>
-          <div className="exportFacts">
-            <span>Resolution <b>1080×1440</b></span>
-            <span>FPS <b>20</b></span>
-            <span>Audio <b>{audio==='mute'?'Off':'32 kbps'}</b></span>
-            <span>Taxminiy sifat <b>{estimatedQuality}</b></span>
-          </div>
+        {active==='adjust'&&<div className="panel">
+          <h3>Rang / Tiniqlik</h3>
+          <label>Yorug‘lik <input type="range" min="70" max="130" value={brightness} onChange={e=>setBrightness(+e.target.value)}/><b>{brightness}%</b></label>
+          <label>Kontrast <input type="range" min="70" max="140" value={contrast} onChange={e=>setContrast(+e.target.value)}/><b>{contrast}%</b></label>
+          <label>Rang <input type="range" min="60" max="150" value={saturation} onChange={e=>setSaturation(+e.target.value)}/><b>{saturation}%</b></label>
+          <label>Tiniqlik <input type="range" min="0" max="100" value={sharpness} onChange={e=>setSharpness(+e.target.value)}/><b>{sharpness}%</b></label>
+          <button className="soft" onClick={()=>{setBrightness(100);setContrast(100);setSaturation(100);setSharpness(28)}}>Standartga qaytarish</button>
+        </div>}
+
+        {active==='export'&&<div className="panel">
+          <h3>Export</h3>
+          <div className="exportPreset"><div><b>UZUM SELLER</b><span>1080×1440 · MP4 · H.264</span></div><strong>✓</strong></div>
+          <div className="seg"><button className={quality==='fast'?'on':''} onClick={()=>setQuality('fast')}>⚡ Tez</button><button className={quality==='quality'?'on':''} onClick={()=>setQuality('quality')}>✨ Sifat</button></div>
+          <div className="facts"><span>FPS <b>{fps}</b></span><span>Video <b>~{estimatedVideoK}k</b></span><span>Audio <b>{audio==='mute'?'Off':'32k'}</b></span><span>Limit <b>3.00 MB</b></span></div>
         </div>}
 
         <div className="exportDock">
-          {validation && <div className={'validator '+(validation.dimensionsOK&&validation.sizeOK?'pass':'fail')}>
-            <strong>{validation.dimensionsOK&&validation.sizeOK?'✓ UZUM CHECK: TAYYOR':'! UZUM CHECK: MUAMMO'}</strong>
-            <span>{validation.width}×{validation.height} · {fmtSize(validation.size)}</span>
-            <small>{validation.dimensionsOK?'✓ 1080×1440':'✕ O‘lcham'} · {validation.sizeOK?'✓ ≤3 MB':'✕ 3 MB dan katta'} · {validation.ratioOK?'✓ 3:4':'✕ Aspect'}</small>
-          </div>}
-          {message && <div className={'msg '+status}>{message}</div>}
-          <button className="export primary" disabled={status==='processing'} onClick={exportVideo}>
-            {status==='processing'?('TAYYORLANMOQDA '+progress+'%'):'UZUM UCHUN EXPORT'}
-          </button>
-          {status==='processing' && <div className="bar"><i style={{width:progress+'%'}}/></div>}
-          {outUrl && <a className="downloadV2" href={outUrl} download="uzum-1080x1440-3mb.mp4">↓ YUKLAB OLISH · {fmtSize(outSize)}</a>}
+          {validation&&<div className={'check '+(validation.sizeOK&&validation.dimensionsOK&&validation.ratioOK?'ok':'bad')}><strong>{validation.sizeOK&&validation.dimensionsOK&&validation.ratioOK?'✓ UZUM CHECK':'! CHECK'}</strong><span>{validation.width}×{validation.height} · {fmtSize(validation.size)}</span><small>{validation.sizeOK?'✓ ≤3 MB':'✕ >3 MB'} · {validation.ratioOK?'✓ 3:4':'✕ ratio'}</small></div>}
+          {message&&<div className={'status '+status}>{message}</div>}
+          <button className="exportBtn" disabled={status==='processing'} onClick={exportVideo}>{status==='processing'?'TAYYORLANMOQDA '+progress+'%':'UZUM UCHUN EXPORT'}</button>
+          {status==='processing'&&<div className="progress"><i style={{width:progress+'%'}}/></div>}
+          {outUrl&&<a className="download" href={outUrl} download="uzum-video-1080x1440.mp4">↓ YUKLAB OLISH · {fmtSize(outSize)}</a>}
+          <small className="shortcut">Ctrl + Enter = Export</small>
         </div>
       </aside>
-    </section>
+    </div>
   </main>;
 }
