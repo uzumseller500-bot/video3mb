@@ -339,11 +339,11 @@ export default function Home() {
   async function encode(ffmpeg,inputName,videoK,attempt,hasWM,audioBitrateK=AUDIO_K){
     const out='out-'+attempt+'.mp4';
     const args=['-ss',start.toFixed(3),'-i',inputName];
-    if(hasWM) args.push('-loop','1','-i','wm.png');
+    if(hasWM) args.push('-i','wm.png');
     args.push('-t',outputDuration.toFixed(3));
 
     if(hasWM){
-      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[base][1:v]overlay='+overlayPos()+':shortest=1[v]','-map','[v]','-map','0:a?');
+      args.push('-filter_complex','[0:v]'+baseFilter()+'[base];[1:v]format=rgba[wm];[base][wm]overlay='+overlayPos()+':eof_action=repeat:repeatlast=1:shortest=0[v]','-map','[v]','-map','0:a?');
     }else{
       args.push('-vf',baseFilter());
     }
