@@ -227,10 +227,10 @@ export default function Home(){
     const x=canvas.getContext('2d',{willReadFrequently:true});
     x.clearRect(0,0,canvas.width,canvas.height);
     x.save();
-    x.filter='blur(10px)';
-    x.globalAlpha=0.075;
+    x.filter='blur(24px)';
+    x.globalAlpha=0.018;
     x.fillStyle='#ffffff';
-    x.font='900 72px Arial';
+    x.font='900 82px Arial';
     x.textAlign='center';
     x.textBaseline='middle';
     x.fillText(AUTO_WATERMARK_TEXT,canvas.width/2,canvas.height/2);
