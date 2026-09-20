@@ -349,10 +349,10 @@ export default function Home() {
     }
 
     if(exportMode==='4k'){
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'fast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','5.1','-crf',compressionMode==='fast'?'21':'19','-threads','4','-pix_fmt','yuv420p','-movflags','+faststart');
     }else{
       const vk=Math.max(MIN_VIDEO_K,Math.floor(videoK));
-      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'fast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
+      args.push('-c:v','libx264','-preset',compressionMode==='fast'?'superfast':'veryfast','-profile:v','high','-level','4.1','-threads','4','-pix_fmt','yuv420p','-b:v',vk+'k','-maxrate',Math.floor(vk*1.03)+'k','-bufsize',Math.floor(vk*1.6)+'k','-movflags','+faststart');
     }
 
     args.push(
@@ -400,11 +400,11 @@ export default function Home() {
       let videoK=Math.max(MIN_VIDEO_K,totalK-audioK-16);
       const hasWM=await makeWatermark(ffmpeg);
 
-      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Ko‘p yadroli tiniq siqish...':'✨ Tiniq siqish...')));
+      setMessage(exportMode==='4k' ? (compressionMode==='fast'?'⚡ 4K tez kodlanmoqda...':'✨ 4K maksimal sifat kodlanmoqda...') : (compressionMode==='fast'?'⚡ Tez siqish...':(engineModeRef.current==='multi'?'✨ Tiniq siqish · ko‘p yadro...':'✨ Tiniq siqish · browser FFmpeg...')));
       let result=await encode(ffmpeg,inputName,videoK,1,hasWM,audioK);
 
       if(exportMode==='3mb'){
-        const maxAttempts=compressionMode==='fast'?2:4;
+        const maxAttempts=compressionMode==='fast'?2:3;
         for(let attempt=2; attempt<=maxAttempts && result.byteLength>MAX_BYTES; attempt++){
           setProgress(1);
           setMessage('3 MB ga avtomatik moslayapman — '+attempt+'/'+maxAttempts+'...');
